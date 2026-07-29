@@ -1,7 +1,7 @@
 FROM python:3.12.10-slim
 
-# psycopg2(PostgreSQL 드라이버) 빌드에 필요한 시스템 패키지
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# 베이스 이미지의 알려진 취약점 패치 + psycopg2(PostgreSQL 드라이버) 빌드에 필요한 시스템 패키지
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     build-essential \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
