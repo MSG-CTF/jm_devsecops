@@ -1,0 +1,21 @@
+# 환경변수 (절대 커밋 금지 — 실제 비밀번호/키 포함)
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.sqlite3
+.venv/
+venv/
+
+# 에디터
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# 보안 스캔 리포트 (CI에서 생성, 커밋 금지)
+*.sarif
+trivy-*.json
+gitleaks-report.json

@@ -1,0 +1,13 @@
+# Core Django
+Django==5.2.16
+
+# Database & Cache
+psycopg2-binary>=2.9.9
+redis>=5.0.0
+
+# WSGI Server (For production)
+gunicorn>=21.2.0
+
+# Linting & Formatting (CI/CD and local development helper)
+black>=24.0.0
+flake8>=7.0.0

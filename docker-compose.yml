@@ -1,0 +1,48 @@
+services:
+  nginx:
+    image: nginx:alpine
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - static_volume:/app/staticfiles:ro
+    ports:
+      - "80:80"        # 외부에 유일하게 열리는 포트
+    depends_on:
+      - web
+
+  web:
+    build: .
+    # CD가 배포 시 digest로 고정된 이미지를 주입할 수 있도록 image도 함께 지정
+    # (로컬 개발 시엔 build로 생성된 이미지가 이 이름으로 태깅됨)
+    image: ${WEB_IMAGE:-ctf-backend:local}
+    command: python manage.py runserver 0.0.0.0:8000
+    volumes:
+      - .:/app
+      - static_volume:/app/staticfiles
+    # ports 항목을 뺐습니다 - 이제 Django는 nginx를 거치지 않고는 외부에서 접근 불가
+    expose:
+      - "8000"          # 컨테이너 간 내부 통신용으로만 열림 (호스트 포트 매핑 없음)
+    env_file:
+      - .env
+    depends_on:
+      - db
+      - redis
+
+  db:
+    image: postgres:16
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+
+volumes:
+  postgres_data:
+  static_volume:

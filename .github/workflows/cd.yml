@@ -1,0 +1,129 @@
+name: Django CD Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+
+jobs:
+  build-scan-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+      digest: ${{ steps.digest.outputs.digest }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Gitleaks 시크릿 스캔
+      run: |
+        docker run --rm \
+          -v "$PWD:/repo" \
+          ghcr.io/gitleaks/gitleaks:latest \
+          dir /repo --redact --verbose
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: 이미지 이름 설정
+      id: image
+      run: |
+        echo "image=${{ secrets.DOCKERHUB_USERNAME }}/ctf-backend" >> "$GITHUB_OUTPUT"
+
+    - name: 검사할 이미지 빌드
+      # latest 태그는 부여하지 않는다 - 배포는 항상 digest 기준으로만 이루어진다
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        file: ./Dockerfile
+        load: true
+        tags: ${{ steps.image.outputs.image }}:${{ github.sha }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Trivy 이미지 취약점 차단 검사 (Critical)
+      uses: aquasecurity/trivy-action@v0.36.0
+      with:
+        version: v0.72.0
+        image-ref: ${{ steps.image.outputs.image }}:${{ github.sha }}
+        scanners: vuln
+        severity: CRITICAL
+        ignore-unfixed: true
+        exit-code: "1"
+
+    - name: Trivy SARIF 생성
+      if: always()
+      uses: aquasecurity/trivy-action@v0.36.0
+      with:
+        version: v0.72.0
+        image-ref: ${{ steps.image.outputs.image }}:${{ github.sha }}
+        scanners: vuln
+        ignore-unfixed: true
+        format: sarif
+        output: trivy-cd-results.sarif
+        exit-code: "0"
+
+    - name: Trivy SARIF 업로드
+      if: always()
+      continue-on-error: true
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: trivy-cd-results.sarif
+        category: trivy-cd-image
+
+    # Docker Hub 로그인 (실제 사용 시 GitHub Repository Secret에 아래 변수들을 등록해야 합니다)
+    - name: Log in to Docker Hub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+    - name: 검사 통과 이미지를 Docker Hub에 push
+      # 커밋 SHA 태그만 push한다 - latest 태그로는 절대 push/운영하지 않는다
+      run: |
+        docker push "${{ steps.image.outputs.image }}:${{ github.sha }}"
+
+    - name: push된 이미지 digest 추출
+      id: digest
+      run: |
+        digest="$(docker buildx imagetools inspect "${{ steps.image.outputs.image }}:${{ github.sha }}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+        echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    needs: build-scan-push
+    runs-on: ubuntu-latest
+
+    steps:
+    # SSH를 통해 배포 서버에 접속하여 docker-compose를 갱신합니다.
+    # - 실제 배포를 진행할 때 GitHub Secrets에 SSH 관련 정보들을 등록하여 사용합니다.
+    # Runtime은 mutable tag가 아닌 digest 기반 image_ref로만 배포한다.
+    - name: Deploy to Server via SSH
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.DEPLOY_HOST }}
+        username: ${{ secrets.DEPLOY_USERNAME }}
+        key: ${{ secrets.DEPLOY_SSH_KEY }}
+        port: ${{ secrets.DEPLOY_PORT || 22 }}
+        script: |
+          # 배포 경로로 이동
+          cd /path/to/your/project
+
+          # 최신 환경변수 가져오기 (필요 시)
+          # git pull 혹은 필요한 설정 파일 갱신
+
+          # Docker Registry 로그인 (Private Repo인 경우 필요)
+          echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+
+          # digest로 고정된 이미지만 사용 (latest/mutable tag 배포 금지)
+          export WEB_IMAGE="${{ needs.build-scan-push.outputs.image }}@${{ needs.build-scan-push.outputs.digest }}"
+          docker compose pull web
+          docker compose up -d --remove-orphans
