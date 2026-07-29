@@ -15,7 +15,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 나머지 소스 코드 복사
 COPY . .
 
-EXPOSE 8000
+EXPOSE 8080
 
-# 개발 확인용 실행 명령어. 운영 배포 시엔 gunicorn 등으로 교체 필요
-CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+# 운영 실행 명령어 (Cloud Run은 $PORT 환경변수로 리슨 포트를 지정함, 기본 8080)
+# 로컬 docker-compose에서는 command를 runserver로 오버라이드해서 사용
+CMD ["sh", "-c", "gunicorn config.wsgi:application --bind 0.0.0.0:${PORT:-8080}"]
