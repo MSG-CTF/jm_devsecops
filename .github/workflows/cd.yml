@@ -37,7 +37,7 @@ jobs:
     - name: 이미지 이름 설정
       id: image
       run: |
-        echo "image=${{ secrets.DOCKERHUB_USERNAME }}/ctf-backend" >> "$GITHUB_OUTPUT"
+        echo "image=${{ vars.DOCKERHUB_USERNAME }}/ctf-backend" >> "$GITHUB_OUTPUT"
 
     - name: 검사할 이미지 빌드
       # latest 태그는 부여하지 않는다 - 배포는 항상 digest 기준으로만 이루어진다
@@ -84,7 +84,7 @@ jobs:
     - name: Log in to Docker Hub
       uses: docker/login-action@v3
       with:
-        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        username: ${{ vars.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
 
     - name: 검사 통과 이미지를 Docker Hub에 push
