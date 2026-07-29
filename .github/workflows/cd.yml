@@ -28,7 +28,7 @@ jobs:
       run: |
         docker run --rm \
           -v "$PWD:/repo" \
-          ghcr.io/gitleaks/gitleaks:latest \
+          ghcr.io/gitleaks/gitleaks:v8.30.1 \
           dir /repo --redact --verbose
 
     - name: Set up Docker Buildx

@@ -35,9 +35,10 @@
 3. Trivy로 빌드된 이미지의 Critical 취약점을 스캔한다. 발견 시 배포를 중단한다.
 4. 스캔을 통과한 이미지만 Docker Hub에 push한다.
 5. push된 이미지의 manifest digest(`sha256:...`)를 추출한다.
-6. 배포 서버에 SSH로 접속하여 `WEB_IMAGE=<repo>@sha256:<digest>` 형태로 **digest 기반 이미지 참조**를 주입하고 `docker compose pull web && docker compose up -d`를 실행한다.
+6. `google-github-actions/auth`로 Workload Identity Federation을 통해 GCP에 인증한다 (서비스 계정 장기 키 없음, GitHub OIDC 토큰으로 `github-actions-deployer` 서비스 계정을 impersonate).
+7. `google-github-actions/deploy-cloudrun`으로 `<Docker Hub 이미지>@sha256:<digest>`를 Cloud Run 서비스 `ctf-backend`(리전 `asia-northeast3`)에 배포한다.
 
-Runtime은 mutable tag(`latest`)가 아닌 digest 기반 `image_ref`로만 배포해야 한다. `docker-compose.yml`의 `web` 서비스는 `image: ${WEB_IMAGE:-ctf-backend:local}`을 함께 선언하고 있어, 로컬 개발 시엔 `build`로 생성한 이미지를 쓰고 배포 시엔 CD가 주입한 digest 이미지를 pull해서 쓴다.
+Runtime은 mutable tag(`latest`)가 아닌 digest 기반 `image_ref`로만 배포해야 한다. 로컬 개발(`docker-compose.yml`)에서는 `build`로 생성한 이미지를 쓰고, 실제 배포는 CD가 Docker Hub에서 digest로 고정한 이미지를 Cloud Run이 직접 pull한다 (별도 배포 서버/SSH 없음).
 
 ## Secret 관리
 
@@ -50,8 +51,8 @@ Runtime은 mutable tag(`latest`)가 아닌 digest 기반 `image_ref`로만 배�
 
 권장:
 
-- 실제 배포 환경에서는 `.env.example`을 참고해 배포 서버에서만 실제 값을 관리한다 (`SECRET_KEY`, `POSTGRES_PASSWORD` 등).
-- 대회/운영 시작 전 `SECRET_KEY`, DB 비밀번호, Docker Hub 토큰, SSH 키를 교체한다.
+- 실제 배포 환경에서는 `.env.example`을 참고해 실제 값을 관리한다 (`SECRET_KEY`, `POSTGRES_PASSWORD` 등). Cloud Run에는 GitHub Secret이나 GCP Secret Manager를 통해 환경변수로 주입한다 (현재 `config/settings.py`의 `SECRET_KEY` 기본값은 테스트용 fallback이며 운영 반영 전 교체 필요).
+- 대회/운영 시작 전 `SECRET_KEY`, DB 비밀번호, Docker Hub 토큰을 교체한다.
 
 ## 실패 대응
 
@@ -63,19 +64,20 @@ Runtime은 mutable tag(`latest`)가 아닌 digest 기반 `image_ref`로만 배�
 
 ### 배포 실패 / 롤백
 
-- 이전 배포에 사용된 digest를 확인한다 (Actions 실행 로그의 `digest` 출력 참고).
-- 배포 서버에서 `WEB_IMAGE=<repo>@<이전 digest>`로 다시 `docker compose pull web && docker compose up -d`를 실행하면 이전 상태로 복구된다.
+- 이전 배포에 사용된 digest를 확인한다 (Actions 실행 로그의 `digest` 출력, 또는 `gcloud run revisions list --service ctf-backend --region asia-northeast3`).
+- `gcloud run services update-traffic ctf-backend --region asia-northeast3 --to-revisions <이전 revision>=100`으로 이전 revision에 트래픽을 되돌리면 즉시 롤백된다.
 - 태그 기반 롤백은 사용하지 않는다 (태그는 항상 최신 커밋을 가리키도록 재사용될 수 있어 신뢰할 수 없음).
 
-### SSH 배포 실패
+### Cloud Run 배포 실패
 
-- `DEPLOY_HOST`, `DEPLOY_USERNAME`, `DEPLOY_SSH_KEY`, `DEPLOY_PORT` 시크릿 설정을 확인한다.
-- 배포 서버의 `docker compose` 버전과 `/path/to/your/project` 경로(실제 배포 시 수정 필요)를 확인한다.
+- `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_SERVICE_ACCOUNT` 시크릿 설정을 확인한다.
+- 서비스 계정(`github-actions-deployer`)에 `roles/run.admin`, `roles/iam.serviceAccountUser` 권한이 있는지, Workload Identity Pool의 `attribute-condition`이 현재 저장소(`MSG-CTF/jm_devsecops`)를 가리키는지 확인한다.
+- 컨테이너가 뜨자마자 죽는 경우 `gcloud run services logs read ctf-backend --region asia-northeast3`로 실제 애플리케이션 로그를 확인한다 (Cloud Run은 `$PORT`로 리슨 포트를 지정하므로 Dockerfile의 `CMD`가 이를 반영하는지도 함께 확인).
 
 ## 운영 전 점검
 
 - [ ] Gitleaks / Trivy 스캔 통과 확인
 - [ ] `.env`의 `DEBUG=False`, 운영용 `SECRET_KEY` 설정 확인
 - [ ] `ALLOWED_HOSTS`에 실제 도메인 반영
-- [ ] Docker Hub / SSH 시크릿 최신 상태 확인
-- [ ] DB, Redis가 nginx를 거치지 않고 외부에 노출되지 않는지 확인 (현재 `docker-compose.yml`은 `db`, `redis` 포트를 호스트에 노출하고 있으므로, 운영 환경에서는 해당 `ports` 매핑 제거를 검토한다)
+- [ ] Docker Hub 시크릿, GCP Workload Identity Federation 설정 최신 상태 확인
+- [ ] DB, Redis가 nginx를 거치지 않고 외부에 노출되지 않는지 확인 (`docker-compose.yml`의 `db`, `redis` 포트는 `127.0.0.1`에만 바인딩되어 있어 로컬 툴 접속용으로만 열려 있고 LAN/외부에는 노출되지 않음)

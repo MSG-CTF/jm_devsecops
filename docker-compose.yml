@@ -36,12 +36,13 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
-      - "5432:5432"
+      # 로컬 DB 툴(psql, DBeaver 등) 접속용 - 127.0.0.1에만 바인딩해서 LAN/외부에는 노출 안 함
+      - "127.0.0.1:5432:5432"
 
   redis:
     image: redis:7
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
 
 volumes:
   postgres_data:
