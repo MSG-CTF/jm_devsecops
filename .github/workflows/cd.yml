@@ -101,29 +101,22 @@ jobs:
   deploy:
     needs: build-scan-push
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
 
     steps:
-    # SSH를 통해 배포 서버에 접속하여 docker-compose를 갱신합니다.
-    # - 실제 배포를 진행할 때 GitHub Secrets에 SSH 관련 정보들을 등록하여 사용합니다.
-    # Runtime은 mutable tag가 아닌 digest 기반 image_ref로만 배포한다.
-    - name: Deploy to Server via SSH
-      uses: appleboy/ssh-action@v1.0.3
+    # GitHub OIDC 토큰으로 GCP 서비스 계정을 impersonate (키 파일 불필요)
+    - name: GCP 인증 (Workload Identity Federation)
+      uses: google-github-actions/auth@v2
       with:
-        host: ${{ secrets.DEPLOY_HOST }}
-        username: ${{ secrets.DEPLOY_USERNAME }}
-        key: ${{ secrets.DEPLOY_SSH_KEY }}
-        port: ${{ secrets.DEPLOY_PORT || 22 }}
-        script: |
-          # 배포 경로로 이동
-          cd /path/to/your/project
+        workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+        service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
-          # 최신 환경변수 가져오기 (필요 시)
-          # git pull 혹은 필요한 설정 파일 갱신
-
-          # Docker Registry 로그인 (Private Repo인 경우 필요)
-          echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
-
-          # digest로 고정된 이미지만 사용 (latest/mutable tag 배포 금지)
-          export WEB_IMAGE="${{ needs.build-scan-push.outputs.image }}@${{ needs.build-scan-push.outputs.digest }}"
-          docker compose pull web
-          docker compose up -d --remove-orphans
+    # Runtime은 mutable tag가 아닌 digest 기반 image_ref로만 배포한다.
+    - name: Cloud Run 배포
+      uses: google-github-actions/deploy-cloudrun@v2
+      with:
+        service: ctf-backend
+        region: asia-northeast3
+        image: ${{ needs.build-scan-push.outputs.image }}@${{ needs.build-scan-push.outputs.digest }}
