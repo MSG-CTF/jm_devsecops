@@ -1,9 +1,9 @@
 FROM python:3.12.10-slim
 
-# 베이스 이미지의 알려진 취약점 패치 + psycopg2(PostgreSQL 드라이버) 빌드에 필요한 시스템 패키지
-RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
-    build-essential \
-    libpq-dev \
+# 베이스 이미지의 알려진 취약점 패치.
+# psycopg2-binary는 휠(.whl)로 배포되므로 build-essential / libpq-dev가 필요 없다.
+# 컴파일러를 런타임 이미지에 남기면 침해 시 공격자가 그 자리에서 코드를 빌드할 수 있다.
+RUN apt-get update && apt-get upgrade -y \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
