@@ -138,3 +138,7 @@ jobs:
         service: ctf-backend
         region: asia-northeast3
         image: ${{ needs.build-scan-push.outputs.image }}@${{ needs.build-scan-push.outputs.digest }}
+        # 값이 아니라 참조만 넘긴다 - 키는 Secret Manager에만 있고 GitHub에도 이 로그에도 남지 않는다.
+        # 교체는 새 버전 추가 후 :latest가 따라가므로 재배포 없이 된다.
+        secrets: |
+          SECRET_KEY=django-secret-key:latest

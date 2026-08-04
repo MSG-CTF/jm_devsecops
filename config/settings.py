@@ -1,11 +1,16 @@
 import os
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = os.environ.get(
-    "SECRET_KEY", "django-insecure-ci-test-key-do-not-use-in-prod"
-)
+# 기본값을 두지 않는다 - 기본값은 결국 아무도 안 바꾸고 그대로 운영에 나간다.
+# 운영은 GCP Secret Manager(django-secret-key), 그 외는 .env / CI 환경변수로 주입한다.
+SECRET_KEY = os.environ.get("SECRET_KEY")
+if not SECRET_KEY:
+    raise ImproperlyConfigured("SECRET_KEY 환경변수가 필요합니다 (.env.example 참고)")
+
 DEBUG = os.environ.get("DEBUG", "False") == "True"
 ALLOWED_HOSTS = os.environ.get("ALLOWED_HOSTS", "*").split(",")
 
