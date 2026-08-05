@@ -14,6 +14,19 @@ if not SECRET_KEY:
 DEBUG = os.environ.get("DEBUG", "False") == "True"
 ALLOWED_HOSTS = os.environ.get("ALLOWED_HOSTS", "*").split(",")
 
+# HTTPS 관련 설정은 로컬(http)에서 켜면 접속 자체가 막히므로 DEBUG일 때만 끈다.
+# CI의 `manage.py check --deploy`는 DEBUG=False로 돌기 때문에 항상 검사된다.
+SECURE_SSL_REDIRECT = not DEBUG
+SESSION_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SECURE = not DEBUG
+SECURE_HSTS_SECONDS = 0 if DEBUG else 31536000
+SECURE_HSTS_INCLUDE_SUBDOMAINS = not DEBUG
+SECURE_HSTS_PRELOAD = not DEBUG
+
+# Cloud Run은 프록시에서 TLS를 끊고 원래 스킴을 이 헤더로 전달한다.
+# 이게 없으면 Django가 모든 요청을 http로 보고 SECURE_SSL_REDIRECT가 무한 리다이렉트를 만든다.
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",

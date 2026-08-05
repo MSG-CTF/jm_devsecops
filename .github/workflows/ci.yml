@@ -143,6 +143,16 @@ jobs:
           echo "manage.py not found. Django project might not be created yet. Skipping tests."
         fi
 
+    # Gitleaks/Trivy는 "알려진 취약점"과 "시크릿처럼 생긴 문자열"만 본다.
+    # 안전하지 않은 '설정'(DEBUG 노출, 비보안 쿠키, startproject 기본 SECRET_KEY)은
+    # 둘 다 못 잡으므로 Django 자체 점검을 게이트로 쓴다.
+    - name: Django 배포 보안 점검 (check --deploy)
+      env:
+        DEBUG: "False"
+        SECRET_KEY: "ci-only-key-not-used-anywhere-else-0123456789abcdef"
+        ALLOWED_HOSTS: "example.com"
+      run: python manage.py check --deploy --fail-level WARNING
+
   docker-build-check:
     runs-on: ubuntu-latest
     permissions:
