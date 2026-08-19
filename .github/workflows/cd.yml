@@ -1,144 +1,29 @@
 name: Django CD Pipeline
 
-# CI가 성공한 커밋만 배포한다 - push에 직접 반응하면 테스트 실패한 코드도 배포된다
+# main에서 CI가 성공한 커밋만 공통 CD 워크플로에 전달한다.
 on:
   workflow_run:
-    workflows: [ "Django CI Pipeline" ]
-    branches: [ "main" ]
-    types: [ completed ]
+    workflows: ["Django CI Pipeline"]
+    branches: ["main"]
+    types: [completed]
 
 permissions:
   contents: read
+  security-events: write
+  id-token: write
 
-# 배포는 겹치면 안 된다 - 진행 중인 배포는 끝까지 두고 다음 것을 대기시킨다
 concurrency:
   group: cd-main
   cancel-in-progress: false
 
-env:
-  # workflow_run에서 github.sha는 main의 최신 커밋이라 CI가 검사한 커밋과 다를 수 있다
-  COMMIT_SHA: ${{ github.event.workflow_run.head_sha }}
-
 jobs:
-  build-scan-push:
-    # CI가 실패/취소된 경우 배포 파이프라인 전체를 실행하지 않는다
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      security-events: write
-
-    outputs:
-      image: ${{ steps.image.outputs.image }}
-      digest: ${{ steps.digest.outputs.digest }}
-
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      with:
-        # CI가 실제로 검사한 그 커밋을 배포한다
-        ref: ${{ env.COMMIT_SHA }}
-        fetch-depth: 0
-
-    - name: Gitleaks 시크릿 스캔
-      # dir이 아닌 git 모드 - 커밋 히스토리까지 스캔해야 지웠다 되살릴 수 있는 시크릿을 잡는다
-      run: |
-        docker run --rm \
-          -v "$PWD:/repo" \
-          ghcr.io/gitleaks/gitleaks:v8.30.1 \
-          git /repo --redact --verbose
-
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-
-    - name: 이미지 이름 설정
-      id: image
-      run: |
-        echo "image=${{ vars.DOCKERHUB_USERNAME }}/ctf-backend" >> "$GITHUB_OUTPUT"
-
-    - name: 검사할 이미지 빌드
-      # latest 태그는 부여하지 않는다 - 배포는 항상 digest 기준으로만 이루어진다
-      uses: docker/build-push-action@v6
-      with:
-        context: .
-        file: ./Dockerfile
-        load: true
-        tags: ${{ steps.image.outputs.image }}:${{ env.COMMIT_SHA }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-
-    - name: Trivy 이미지 취약점/시크릿 차단 검사 (Critical, High)
-      # secret 스캐너 추가 - gitleaks는 저장소만 보므로 이미지 레이어에 박힌 시크릿은 여기서만 잡힌다
-      uses: aquasecurity/trivy-action@v0.36.0
-      with:
-        version: v0.72.0
-        image-ref: ${{ steps.image.outputs.image }}:${{ env.COMMIT_SHA }}
-        scanners: vuln,secret
-        severity: CRITICAL,HIGH
-        ignore-unfixed: true
-        exit-code: "1"
-
-    - name: Trivy SARIF 생성
-      if: always()
-      uses: aquasecurity/trivy-action@v0.36.0
-      with:
-        version: v0.72.0
-        image-ref: ${{ steps.image.outputs.image }}:${{ env.COMMIT_SHA }}
-        scanners: vuln,secret
-        ignore-unfixed: true
-        format: sarif
-        output: trivy-cd-results.sarif
-        exit-code: "0"
-
-    - name: Trivy SARIF 업로드
-      if: always()
-      continue-on-error: true
-      uses: github/codeql-action/upload-sarif@v3
-      with:
-        sarif_file: trivy-cd-results.sarif
-        category: trivy-cd-image
-
-    # Docker Hub 로그인 (실제 사용 시 GitHub Repository Secret에 아래 변수들을 등록해야 합니다)
-    - name: Log in to Docker Hub
-      uses: docker/login-action@v3
-      with:
-        username: ${{ vars.DOCKERHUB_USERNAME }}
-        password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-    - name: 검사 통과 이미지를 Docker Hub에 push
-      # 커밋 SHA 태그만 push한다 - latest 태그로는 절대 push/운영하지 않는다
-      run: |
-        docker push "${{ steps.image.outputs.image }}:${{ env.COMMIT_SHA }}"
-
-    - name: push된 이미지 digest 추출
-      id: digest
-      run: |
-        digest="$(docker buildx imagetools inspect "${{ steps.image.outputs.image }}:${{ env.COMMIT_SHA }}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
-        echo "digest=$digest" >> "$GITHUB_OUTPUT"
-
   deploy:
-    needs: build-scan-push
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-
-    steps:
-    # GitHub OIDC 토큰으로 GCP 서비스 계정을 impersonate (키 파일 불필요)
-    - name: GCP 인증 (Workload Identity Federation)
-      uses: google-github-actions/auth@v2
-      with:
-        workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-        service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-
-    # Runtime은 mutable tag가 아닌 digest 기반 image_ref로만 배포한다.
-    - name: Cloud Run 배포
-      uses: google-github-actions/deploy-cloudrun@v2
-      with:
-        service: ctf-backend
-        region: asia-northeast3
-        image: ${{ needs.build-scan-push.outputs.image }}@${{ needs.build-scan-push.outputs.digest }}
-        # 값이 아니라 참조만 넘긴다 - 키는 Secret Manager에만 있고 GitHub에도 이 로그에도 남지 않는다.
-        # 교체는 새 버전 추가 후 :latest가 따라가므로 재배포 없이 된다.
-        secrets: |
-          SECRET_KEY=django-secret-key:latest
+    if: github.event.workflow_run.conclusion == 'success'
+    uses: ./.github/workflows/reusable-cd.yml
+    with:
+      commit_sha: ${{ github.event.workflow_run.head_sha }}
+      dockerhub_username: ${{ vars.DOCKERHUB_USERNAME }}
+      image_name: ctf-backend
+      cloud_run_service: ctf-backend
+      region: asia-northeast3
+    secrets: inherit

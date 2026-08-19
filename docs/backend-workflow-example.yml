@@ -1,0 +1,32 @@
+# 이 파일을 백엔드 저장소의 .github/workflows/ci-cd.yml로 복사한다.
+name: Backend CI/CD
+
+on:
+  push:
+  pull_request:
+    branches: ["main", "develop"]
+
+permissions:
+  contents: read
+  security-events: write
+  id-token: write
+
+concurrency:
+  group: backend-${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  ci:
+    uses: MSG-CTF/jm_devsecops/.github/workflows/reusable-ci.yml@v1.0.0
+
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: ci
+    uses: MSG-CTF/jm_devsecops/.github/workflows/reusable-cd.yml@v1.0.0
+    with:
+      commit_sha: ${{ github.sha }}
+      dockerhub_username: ${{ vars.DOCKERHUB_USERNAME }}
+      image_name: ctf-backend
+      cloud_run_service: ctf-backend
+      region: asia-northeast3
+    secrets: inherit

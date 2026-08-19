@@ -40,6 +40,25 @@
 
 Runtime은 mutable tag(`latest`)가 아닌 digest 기반 `image_ref`로만 배포해야 한다. 로컬 개발(`docker-compose.yml`)에서는 `build`로 생성한 이미지를 쓰고, 실제 배포는 CD가 Docker Hub에서 digest로 고정한 이미지를 Cloud Run이 직접 pull한다 (별도 배포 서버/SSH 없음).
 
+## 백엔드 저장소에서 공통 파이프라인 사용
+
+실제 CI/CD 구현은 다음 재사용 워크플로에 있다.
+
+- `.github/workflows/reusable-ci.yml`: 테스트, 린트, Gitleaks/Trivy 검사, Docker 빌드 검증
+- `.github/workflows/reusable-cd.yml`: 이미지 빌드/검사/push와 Cloud Run 배포
+
+백엔드 저장소에는 `docs/backend-workflow-example.yml`을 `.github/workflows/ci-cd.yml`로 복사한다. 호출 버전은 `@main` 대신 `@v1.0.0`처럼 태그로 고정한다.
+
+공통 파이프라인 변경 시에는 기존 태그를 덮어쓰지 않고 새 SemVer 태그를 만든다.
+
+- 패치(`v1.0.1`): 동작을 바꾸지 않는 버그 수정
+- 마이너(`v1.1.0`): 기존 호출과 호환되는 검사나 입력 추가
+- 메이저(`v2.0.0`): 입력, Secret 이름 등 호출 방법이 바뀌는 변경
+
+백엔드 저장소에는 `DOCKERHUB_USERNAME` Repository variable과 `DOCKERHUB_TOKEN`, `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_SERVICE_ACCOUNT` Repository secret이 필요하다. 중앙 저장소가 private이면 `Settings > Actions > General > Access`에서 같은 조직의 백엔드 저장소가 재사용 워크플로를 읽을 수 있도록 허용해야 한다.
+
+GCP Workload Identity Provider가 저장소 이름을 제한하고 있다면 중앙 저장소가 아닌 **호출하는 백엔드 저장소**도 허용해야 한다. 재사용 CD에서 발급되는 OIDC 토큰의 repository 정보는 호출 저장소를 기준으로 하기 때문이다.
+
 ## Secret 관리
 
 금지 사항:
@@ -72,6 +91,7 @@ Runtime은 mutable tag(`latest`)가 아닌 digest 기반 `image_ref`로만 배�
 
 - `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_SERVICE_ACCOUNT` 시크릿 설정을 확인한다.
 - 서비스 계정(`github-actions-deployer`)에 `roles/run.admin`, `roles/iam.serviceAccountUser` 권한이 있는지, Workload Identity Pool의 `attribute-condition`이 현재 저장소(`MSG-CTF/jm_devsecops`)를 가리키는지 확인한다.
+- 백엔드가 재사용 CD를 호출하는 구성에서는 Workload Identity Pool의 `attribute-condition`이 해당 백엔드 저장소도 허용하는지 확인한다.
 - 컨테이너가 뜨자마자 죽는 경우 `gcloud run services logs read ctf-backend --region asia-northeast3`로 실제 애플리케이션 로그를 확인한다 (Cloud Run은 `$PORT`로 리슨 포트를 지정하므로 Dockerfile의 `CMD`가 이를 반영하는지도 함께 확인).
 
 ## 운영 전 점검

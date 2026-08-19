@@ -1,0 +1,152 @@
+name: Reusable Django CD
+
+on:
+  workflow_call:
+    inputs:
+      commit_sha:
+        description: 배포할 커밋 SHA
+        required: true
+        type: string
+      dockerhub_username:
+        description: Docker Hub 사용자 이름
+        required: true
+        type: string
+      image_name:
+        description: Docker Hub 이미지 이름
+        required: false
+        default: ctf-backend
+        type: string
+      cloud_run_service:
+        description: Cloud Run 서비스 이름
+        required: false
+        default: ctf-backend
+        type: string
+      region:
+        description: Cloud Run 리전
+        required: false
+        default: asia-northeast3
+        type: string
+    secrets:
+      DOCKERHUB_TOKEN:
+        required: true
+      GCP_WORKLOAD_IDENTITY_PROVIDER:
+        required: true
+      GCP_SERVICE_ACCOUNT:
+        required: true
+
+env:
+  COMMIT_SHA: ${{ inputs.commit_sha }}
+
+jobs:
+  build-scan-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+      digest: ${{ steps.digest.outputs.digest }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ env.COMMIT_SHA }}
+        fetch-depth: 0
+
+    - name: Gitleaks 시크릿 스캔
+      run: |
+        docker run --rm \
+          -v "$PWD:/repo" \
+          ghcr.io/gitleaks/gitleaks:v8.30.1 \
+          git /repo --redact --verbose
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: 이미지 이름 설정
+      id: image
+      env:
+        DOCKERHUB_USERNAME: ${{ inputs.dockerhub_username }}
+        IMAGE_NAME: ${{ inputs.image_name }}
+      run: echo "image=${DOCKERHUB_USERNAME}/${IMAGE_NAME}" >> "$GITHUB_OUTPUT"
+
+    - name: 검사할 이미지 빌드
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        file: ./Dockerfile
+        load: true
+        tags: ${{ steps.image.outputs.image }}:${{ env.COMMIT_SHA }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Trivy 이미지 취약점/시크릿 차단 검사 (Critical, High)
+      uses: aquasecurity/trivy-action@v0.36.0
+      with:
+        version: v0.72.0
+        image-ref: ${{ steps.image.outputs.image }}:${{ env.COMMIT_SHA }}
+        scanners: vuln,secret
+        severity: CRITICAL,HIGH
+        ignore-unfixed: true
+        exit-code: "1"
+
+    - name: Trivy SARIF 생성
+      if: always()
+      uses: aquasecurity/trivy-action@v0.36.0
+      with:
+        version: v0.72.0
+        image-ref: ${{ steps.image.outputs.image }}:${{ env.COMMIT_SHA }}
+        scanners: vuln,secret
+        ignore-unfixed: true
+        format: sarif
+        output: trivy-cd-results.sarif
+        exit-code: "0"
+
+    - name: Trivy SARIF 업로드
+      if: always()
+      continue-on-error: true
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: trivy-cd-results.sarif
+        category: trivy-cd-image
+
+    - name: Log in to Docker Hub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ inputs.dockerhub_username }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+    - name: 검사 통과 이미지를 Docker Hub에 push
+      run: docker push "${{ steps.image.outputs.image }}:${{ env.COMMIT_SHA }}"
+
+    - name: push된 이미지 digest 추출
+      id: digest
+      run: |
+        digest="$(docker buildx imagetools inspect "${{ steps.image.outputs.image }}:${{ env.COMMIT_SHA }}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+        echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    needs: build-scan-push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+    - name: GCP 인증 (Workload Identity Federation)
+      uses: google-github-actions/auth@v2
+      with:
+        workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+        service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+    - name: Cloud Run 배포
+      uses: google-github-actions/deploy-cloudrun@v2
+      with:
+        service: ${{ inputs.cloud_run_service }}
+        region: ${{ inputs.region }}
+        image: ${{ needs.build-scan-push.outputs.image }}@${{ needs.build-scan-push.outputs.digest }}
+        secrets: |
+          SECRET_KEY=django-secret-key:latest
+
