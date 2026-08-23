@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       commit_sha:
-        description: 배포할 커밋 SHA
+        description: 배포할 백엔드 commit SHA
         required: true
         type: string
       dockerhub_username:
@@ -26,6 +26,57 @@ on:
         required: false
         default: asia-northeast3
         type: string
+      deployment_environment:
+        description: GitHub 배포 승인 규칙을 적용할 Environment 이름
+        required: false
+        default: production
+        type: string
+      django_allowed_hosts:
+        description: 쉼표로 구분한 운영 Django ALLOWED_HOSTS
+        required: true
+        type: string
+      healthcheck_host:
+        description: Docker 내부 HEALTHCHECK가 Host 헤더로 사용할 운영 호스트 하나
+        required: true
+        type: string
+      postgres_db:
+        description: 운영 PostgreSQL 데이터베이스 이름
+        required: true
+        type: string
+      postgres_user:
+        description: 운영 PostgreSQL 사용자 이름
+        required: true
+        type: string
+      postgres_host:
+        description: 운영 PostgreSQL 접속 호스트
+        required: true
+        type: string
+      postgres_port:
+        description: 운영 PostgreSQL 접속 포트
+        required: false
+        default: "5432"
+        type: string
+      redis_url:
+        description: 운영 Redis 접속 URL
+        required: true
+        type: string
+      django_secret_version:
+        description: django-secret-key의 고정 Secret Manager 버전 번호
+        required: true
+        type: string
+      jwt_secret_version:
+        description: jwt-secret의 고정 Secret Manager 버전 번호
+        required: true
+        type: string
+      postgres_password_secret_version:
+        description: postgres-password의 고정 Secret Manager 버전 번호
+        required: true
+        type: string
+      health_path:
+        description: 배포 후 확인할 HTTP 경로
+        required: false
+        default: /healthz
+        type: string
     secrets:
       DOCKERHUB_TOKEN:
         required: true
@@ -43,27 +94,41 @@ jobs:
     permissions:
       contents: read
       security-events: write
-
     outputs:
       image: ${{ steps.image.outputs.image }}
       digest: ${{ steps.digest.outputs.digest }}
-
     steps:
+    - name: 배포 입력값 확인
+      env:
+        DOCKERHUB_USERNAME: ${{ inputs.dockerhub_username }}
+        DJANGO_SECRET_VERSION: ${{ inputs.django_secret_version }}
+        JWT_SECRET_VERSION: ${{ inputs.jwt_secret_version }}
+        POSTGRES_PASSWORD_SECRET_VERSION: ${{ inputs.postgres_password_secret_version }}
+      run: |
+        [[ "$COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "commit_sha는 40자리 Git SHA여야 합니다."; exit 1; }
+        test -n "$DOCKERHUB_USERNAME" || { echo "dockerhub_username이 비어 있습니다."; exit 1; }
+        for version in "$DJANGO_SECRET_VERSION" "$JWT_SECRET_VERSION" "$POSTGRES_PASSWORD_SECRET_VERSION"; do
+          [[ "$version" =~ ^[1-9][0-9]*$ ]] || { echo "Secret 버전은 latest가 아닌 숫자여야 합니다."; exit 1; }
+        done
+
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       with:
         ref: ${{ env.COMMIT_SHA }}
         fetch-depth: 0
 
+    - name: Dockerfile 필수 확인
+      run: test -f Dockerfile || { echo "루트 Dockerfile이 없습니다."; exit 1; }
+
     - name: Gitleaks 시크릿 스캔
       run: |
         docker run --rm \
-          -v "$PWD:/repo" \
-          ghcr.io/gitleaks/gitleaks:v8.30.1 \
+          -v "${GITHUB_WORKSPACE}:/repo" \
+          ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
           git /repo --redact --verbose
 
     - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
+      uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
     - name: 이미지 이름 설정
       id: image
@@ -73,7 +138,7 @@ jobs:
       run: echo "image=${DOCKERHUB_USERNAME}/${IMAGE_NAME}" >> "$GITHUB_OUTPUT"
 
     - name: 검사할 이미지 빌드
-      uses: docker/build-push-action@v6
+      uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
       with:
         context: .
         file: ./Dockerfile
@@ -83,7 +148,7 @@ jobs:
         cache-to: type=gha,mode=max
 
     - name: Trivy 이미지 취약점/시크릿 차단 검사 (Critical, High)
-      uses: aquasecurity/trivy-action@v0.36.0
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
       with:
         version: v0.72.0
         image-ref: ${{ steps.image.outputs.image }}:${{ env.COMMIT_SHA }}
@@ -92,14 +157,15 @@ jobs:
         ignore-unfixed: true
         exit-code: "1"
 
-    - name: Trivy SARIF 생성
+    - name: Trivy SARIF 생성 (수정본 없는 취약점 포함)
       if: always()
-      uses: aquasecurity/trivy-action@v0.36.0
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
       with:
         version: v0.72.0
         image-ref: ${{ steps.image.outputs.image }}:${{ env.COMMIT_SHA }}
         scanners: vuln,secret
-        ignore-unfixed: true
+        severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+        ignore-unfixed: false
         format: sarif
         output: trivy-cd-results.sarif
         exit-code: "0"
@@ -107,46 +173,73 @@ jobs:
     - name: Trivy SARIF 업로드
       if: always()
       continue-on-error: true
-      uses: github/codeql-action/upload-sarif@v3
+      uses: github/codeql-action/upload-sarif@42947a340483f03ba47bb1a039b2c519aab3df85 # v3
       with:
         sarif_file: trivy-cd-results.sarif
         category: trivy-cd-image
 
     - name: Log in to Docker Hub
-      uses: docker/login-action@v3
+      uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
       with:
         username: ${{ inputs.dockerhub_username }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
 
     - name: 검사 통과 이미지를 Docker Hub에 push
-      run: docker push "${{ steps.image.outputs.image }}:${{ env.COMMIT_SHA }}"
+      run: docker push "${{ steps.image.outputs.image }}:${COMMIT_SHA}"
 
     - name: push된 이미지 digest 추출
       id: digest
       run: |
-        digest="$(docker buildx imagetools inspect "${{ steps.image.outputs.image }}:${{ env.COMMIT_SHA }}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+        digest="$(docker buildx imagetools inspect "${{ steps.image.outputs.image }}:${COMMIT_SHA}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+        [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "올바른 image digest를 얻지 못했습니다."; exit 1; }
         echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
   deploy:
     needs: build-scan-push
     runs-on: ubuntu-latest
+    environment: ${{ inputs.deployment_environment }}
     permissions:
       contents: read
       id-token: write
-
     steps:
     - name: GCP 인증 (Workload Identity Federation)
-      uses: google-github-actions/auth@v2
+      uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2
       with:
         workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
         service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
     - name: Cloud Run 배포
-      uses: google-github-actions/deploy-cloudrun@v2
+      id: deploy
+      uses: google-github-actions/deploy-cloudrun@251330ba9a8a34bfbc1622895f42e1d53fd14522 # v2
       with:
         service: ${{ inputs.cloud_run_service }}
         region: ${{ inputs.region }}
         image: ${{ needs.build-scan-push.outputs.image }}@${{ needs.build-scan-push.outputs.digest }}
+        env_vars: |
+          DJANGO_DEBUG=False
+          DJANGO_ALLOWED_HOSTS=${{ inputs.django_allowed_hosts }}
+          HEALTHCHECK_HOST=${{ inputs.healthcheck_host }}
+          POSTGRES_DB=${{ inputs.postgres_db }}
+          POSTGRES_USER=${{ inputs.postgres_user }}
+          POSTGRES_HOST=${{ inputs.postgres_host }}
+          POSTGRES_PORT=${{ inputs.postgres_port }}
+          REDIS_URL=${{ inputs.redis_url }}
         secrets: |
-          SECRET_KEY=django-secret-key:latest
+          DJANGO_SECRET_KEY=django-secret-key:${{ inputs.django_secret_version }}
+          JWT_SECRET=jwt-secret:${{ inputs.jwt_secret_version }}
+          POSTGRES_PASSWORD=postgres-password:${{ inputs.postgres_password_secret_version }}
 
+    - name: 배포 후 healthz 확인
+      env:
+        SERVICE_URL: ${{ steps.deploy.outputs.url }}
+        HEALTH_PATH: ${{ inputs.health_path }}
+      run: |
+        test -n "$SERVICE_URL" || { echo "Cloud Run URL을 얻지 못했습니다."; exit 1; }
+        for _attempt in {1..20}; do
+          if curl --fail --silent --show-error "${SERVICE_URL}${HEALTH_PATH}"; then
+            exit 0
+          fi
+          sleep 3
+        done
+        echo "배포 후 상태 확인에 실패했습니다. Cloud Run revision과 애플리케이션 로그를 확인하세요."
+        exit 1

@@ -16,3 +16,5 @@ concurrency:
 jobs:
   ci:
     uses: ./.github/workflows/reusable-ci.yml
+    with:
+      enforce_black: true

@@ -1,103 +1,258 @@
-# DevSecOps 운영 절차
+# MSG 백엔드 DevSecOps 운영 절차
 
-## 구성
+## 지금 만들려는 구조
 
-- `nginx` : 외부에 유일하게 열리는 리버스 프록시 (포트 80)
-- `web` : Django 애플리케이션 (nginx를 통해서만 접근 가능)
-- `db` : PostgreSQL 16
-- `redis` : Redis 7
+`jm_devsecops`는 검사 방법을 보관하는 중앙 설명서이고, `msg-backend`는 검사할 실제 애플리케이션이다.
 
-## 파이프라인 1: CI (`.github/workflows/ci.yml`)
+```text
+MSG-CTF/jm_devsecops
+└── reusable-ci.yml / reusable-cd.yml / 버전 태그
+                         ↑ 호출
+MSG-CTF/msg-backend
+└── 짧은 ci-cd.yml + Dockerfile + Django 코드와 테스트
+```
 
-담당: 개발자 / CI
+중앙 워크플로가 실행되어도 checkout되는 코드는 호출한 백엔드 저장소의 코드다. 따라서 Dockerfile, `/healthz`, Django 설정, migration과 테스트는 반드시 백엔드 저장소에 있어야 한다.
 
-1. **security-scan**
-   - Gitleaks로 저장소 전체를 스캔하여 시크릿(토큰, 자격증명, 비밀번호, API 키 등) 유출 여부를 확인한다. 발견 시 즉시 실패한다.
-   - Trivy로 파일시스템(의존성 포함)의 Critical 취약점을 스캔한다. Critical 발견 시 즉시 실패한다.
-   - 스캔 결과는 SARIF로 변환되어 GitHub Security 탭(Code Scanning)에 업로드된다.
-2. **lint-and-test**
-   - Black / Flake8 린트를 수행한다.
-   - `manage.py`가 존재하면 Django 테스트를 실행한다 (postgres, redis 서비스 컨테이너 사용).
-3. **docker-build-check**
-   - Dockerfile 빌드가 성공하는지 확인한다.
-   - 빌드된 이미지에 대해 Trivy 이미지 스캔(Critical)을 수행한다. Critical 발견 시 실패한다.
+## 버전 규칙
 
-모든 단계를 통과해야 PR을 병합할 수 있다.
+- `v1.0.0`은 이미 배포한 버전이므로 이동하거나 덮어쓰지 않는다.
+- 현재 변경은 Secret 이름과 CD 입력 방법이 달라지는 호환성 변경이므로 `v2.0.0` 후보로 준비한다.
+- 중앙 CI와 CD, 백엔드용 파일을 모두 검증하기 전에는 `v2.0.0` 태그를 만들지 않는다.
+- 백엔드에서는 `@main`이 아니라 검증된 `@v2.0.0`을 호출한다.
 
-## 파이프라인 2: CD (`.github/workflows/cd.yml`)
+## 2026-08-23 로컬 검증 기록
 
-담당: DevSecOps
+- 중앙 workflow 4개의 `actionlint` 문법 검사 통과
+- 중앙 Django 테스트 2개와 `check --deploy` 통과
+- 중앙 PostgreSQL 쿼리·migration 및 Redis 저장·조회 통과
+- 최신 백엔드 `main` 임시 복제본에 새 파일을 적용한 뒤 전체 테스트 41개 통과
+- 임시 백엔드의 migration, Django cache, Flake8 치명 오류와 `check --deploy` 통과
+- 중앙 이미지와 임시 백엔드 이미지 모두 Trivy HIGH·CRITICAL 0개
+- 비루트 `app` 사용자, Gunicorn PID 1, 운영 Host 헤더의 `/healthz` 200 응답 확인
+- Gitleaks Git 기록 검사에서 유출 0개
 
-`main` 브랜치 push 시에만 실행된다.
+이 기록은 로컬·임시 복제본 결과다. 중앙 `main`에 push한 다음 GitHub Actions에서도 같은 결과를 확인해야 `v2.0.0` 태그를 만들 수 있다.
 
-1. Gitleaks로 저장소를 다시 스캔한다.
-2. Dockerfile로 이미지를 빌드하고 커밋 SHA 태그(`:${{ github.sha }}`)만 부여한다. **`latest` 태그는 사용하지 않는다.**
-3. Trivy로 빌드된 이미지의 Critical 취약점을 스캔한다. 발견 시 배포를 중단한다.
-4. 스캔을 통과한 이미지만 Docker Hub에 push한다.
-5. push된 이미지의 manifest digest(`sha256:...`)를 추출한다.
-6. `google-github-actions/auth`로 Workload Identity Federation을 통해 GCP에 인증한다 (서비스 계정 장기 키 없음, GitHub OIDC 토큰으로 `github-actions-deployer` 서비스 계정을 impersonate).
-7. `google-github-actions/deploy-cloudrun`으로 `<Docker Hub 이미지>@sha256:<digest>`를 Cloud Run 서비스 `ctf-backend`(리전 `asia-northeast3`)에 배포한다.
+## 1단계: 중앙 CI에서 하는 검사
 
-Runtime은 mutable tag(`latest`)가 아닌 digest 기반 `image_ref`로만 배포해야 한다. 로컬 개발(`docker-compose.yml`)에서는 `build`로 생성한 이미지를 쓰고, 실제 배포는 CD가 Docker Hub에서 digest로 고정한 이미지를 Cloud Run이 직접 pull한다 (별도 배포 서버/SSH 없음).
+`reusable-ci.yml`은 다음 세 작업을 병렬로 실행한다.
 
-## 백엔드 저장소에서 공통 파이프라인 사용
+### 보안 검사
 
-실제 CI/CD 구현은 다음 재사용 워크플로에 있다.
+1. Gitleaks가 Git 기록까지 확인한다.
+2. Trivy가 HIGH·CRITICAL 취약점을 검사한다.
+3. 수정 버전이 있는 HIGH·CRITICAL 취약점은 CI를 실패시킨다.
+4. 수정 버전이 아직 없는 취약점도 SARIF 보고서에는 남긴다.
 
-- `.github/workflows/reusable-ci.yml`: 테스트, 린트, Gitleaks/Trivy 검사, Docker 빌드 검증
-- `.github/workflows/reusable-cd.yml`: 이미지 빌드/검사/push와 Cloud Run 배포
+### Django 검사
 
-백엔드 저장소에는 `docs/backend-workflow-example.yml`을 `.github/workflows/ci-cd.yml`로 복사한다. 호출 버전은 `@main` 대신 `@v1.0.0`처럼 태그로 고정한다.
+1. PostgreSQL과 Redis 서비스 컨테이너를 실행한다.
+2. `requirements.txt`와 고정 버전의 Black·Flake8을 설치한다.
+3. Black과 치명적인 Flake8 오류를 검사한다. 기존 백엔드는 Black 정리 기간 동안 결과를 경고로 보여주고, 별도 포맷 PR 뒤 `enforce_black: true`로 병합을 차단한다.
+4. PostgreSQL에 연결해서 `SELECT 1`을 실행한다.
+5. `makemigrations --check --dry-run`으로 누락된 migration을 찾는다.
+6. `migrate --noinput`으로 테스트 DB에 migration을 실제 적용한다.
+7. Redis에 값을 저장하고 다시 읽는다.
+8. `django-redis`를 사용하는 프로젝트는 Django cache를 통해서도 저장·조회한다.
+9. 기존 API 기능 테스트는 HTTP test client와 맞도록 테스트 모드로 실행하고, 테스트가 0개면 실패한다.
+10. 별도 단계에서 `DJANGO_DEBUG=False`와 `check --deploy --fail-level WARNING`을 사용해 운영 보안 설정을 확인한다.
 
-공통 파이프라인 변경 시에는 기존 태그를 덮어쓰지 않고 새 SemVer 태그를 만든다.
+### Docker 검사
 
-- 패치(`v1.0.1`): 동작을 바꾸지 않는 버그 수정
-- 마이너(`v1.1.0`): 기존 호출과 호환되는 검사나 입력 추가
-- 메이저(`v2.0.0`): 입력, Secret 이름 등 호출 방법이 바뀌는 변경
+1. 루트 `Dockerfile`이 없으면 실패한다.
+2. 이미지 빌드가 되는지 확인한다.
+3. 컨테이너 기본 사용자가 root면 실패한다.
+4. Docker `HEALTHCHECK`가 없으면 실패한다.
+5. `DJANGO_ALLOWED_HOSTS=example.com`인 운영 형태로 컨테이너를 실행한다.
+6. `Host: example.com`으로 `/healthz`를 요청해서 200 응답을 확인한다.
+7. Trivy로 만들어진 이미지도 검사한다.
 
-백엔드 저장소에는 `DOCKERHUB_USERNAME` Repository variable과 `DOCKERHUB_TOKEN`, `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_SERVICE_ACCOUNT` Repository secret이 필요하다. 중앙 저장소가 private이면 `Settings > Actions > General > Access`에서 같은 조직의 백엔드 저장소가 재사용 워크플로를 읽을 수 있도록 허용해야 한다.
+Action과 서비스 이미지는 commit SHA 또는 image digest로 고정한다. 태그 설명은 사람이 버전을 알아보기 위한 주석일 뿐, 실제 실행 대상은 고정된 SHA다.
 
-GCP Workload Identity Provider가 저장소 이름을 제한하고 있다면 중앙 저장소가 아닌 **호출하는 백엔드 저장소**도 허용해야 한다. 재사용 CD에서 발급되는 OIDC 토큰의 repository 정보는 호출 저장소를 기준으로 하기 때문이다.
+Python 베이스 이미지는 오래된 patch digest를 계속 붙잡지 않는다. Trivy에서 수정 가능한 HIGH·CRITICAL OS 취약점이 발견되면 최신 `python:3.12-slim` manifest로 바꾸고 Debian 보안 업데이트를 적용한 뒤 다시 검사한다. 배포에는 CI가 검사한 최종 image digest를 사용한다.
 
-## Secret 관리
+## 2단계: 백엔드의 새 브랜치 준비
 
-금지 사항:
+PR #1 브랜치에서 이어서 작업하지 않는다. 최신 백엔드 `main`에서 새 브랜치를 만든다.
 
-- Docker build args로 시크릿 전달
-- Docker 이미지 레이어에 시크릿 저장
-- CI 로그 출력
-- 저장소에 `.env` 커밋 (`.gitignore`, `.dockerignore`에 이미 등록됨)
+```bash
+git switch main
+git pull origin main
+git switch -c chore/devsecops-v2
+```
 
-권장:
+PR #1은 새 PR이 완성될 때까지 참고 자료로 남겨 둔다.
 
-- 실제 배포 환경에서는 `.env.example`을 참고해 실제 값을 관리한다 (`SECRET_KEY`, `POSTGRES_PASSWORD` 등). Cloud Run에는 GitHub Secret이나 GCP Secret Manager를 통해 환경변수로 주입한다 (현재 `config/settings.py`의 `SECRET_KEY` 기본값은 테스트용 fallback이며 운영 반영 전 교체 필요).
-- 대회/운영 시작 전 `SECRET_KEY`, DB 비밀번호, Docker Hub 토큰을 교체한다.
+### 백엔드에 추가할 파일
 
-## 실패 대응
+중앙 저장소의 다음 예제를 백엔드에 맞는 위치로 복사한다.
 
-### Gitleaks / Trivy 실패
+```text
+docs/backend-files/Dockerfile       → msg-backend/Dockerfile
+docs/backend-files/.dockerignore    → msg-backend/.dockerignore
+docs/backend-files/health.py        → msg-backend/config/health.py
+docs/backend-files/test_health.py   → msg-backend/config/tests.py
+docs/backend-workflow-example.yml   → msg-backend/.github/workflows/ci-cd.yml
+```
 
-- Actions 로그와 GitHub Security 탭(Code Scanning Alerts)에서 스캔 결과를 확인한다.
-- 시크릿이 발견되면 해당 자격증명을 즉시 폐기하고 새 값으로 교체한 뒤, 히스토리에서 제거한다.
-- Critical 취약점은 의존성(`requirements.txt`) 또는 베이스 이미지(`python:3.12.10-slim`)를 업데이트하여 해결한다.
+`config/tests.py`가 이미 생겼다면 덮어쓰지 말고 `HealthCheckTest`만 합친다.
 
-### 배포 실패 / 롤백
+백엔드 `requirements.txt`에는 다음 고정 버전을 한 줄 추가한다.
 
-- 이전 배포에 사용된 digest를 확인한다 (Actions 실행 로그의 `digest` 출력, 또는 `gcloud run revisions list --service ctf-backend --region asia-northeast3`).
-- `gcloud run services update-traffic ctf-backend --region asia-northeast3 --to-revisions <이전 revision>=100`으로 이전 revision에 트래픽을 되돌리면 즉시 롤백된다.
-- 태그 기반 롤백은 사용하지 않는다 (태그는 항상 최신 커밋을 가리키도록 재사용될 수 있어 신뢰할 수 없음).
+```text
+gunicorn==26.1.0
+```
 
-### Cloud Run 배포 실패
+현재 `sqlparse==0.5.5`는 Trivy에서 수정 가능한 HIGH 취약점 3개가 확인되므로 다음처럼 올린다.
 
-- `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_SERVICE_ACCOUNT` 시크릿 설정을 확인한다.
-- 서비스 계정(`github-actions-deployer`)에 `roles/run.admin`, `roles/iam.serviceAccountUser` 권한이 있는지, Workload Identity Pool의 `attribute-condition`이 현재 저장소(`MSG-CTF/jm_devsecops`)를 가리키는지 확인한다.
-- 백엔드가 재사용 CD를 호출하는 구성에서는 Workload Identity Pool의 `attribute-condition`이 해당 백엔드 저장소도 허용하는지 확인한다.
-- 컨테이너가 뜨자마자 죽는 경우 `gcloud run services logs read ctf-backend --region asia-northeast3`로 실제 애플리케이션 로그를 확인한다 (Cloud Run은 `$PORT`로 리슨 포트를 지정하므로 Dockerfile의 `CMD`가 이를 반영하는지도 함께 확인).
+```text
+sqlparse==0.6.0
+```
 
-## 운영 전 점검
+백엔드 `config/urls.py`에는 다음 import와 URL을 추가한다.
 
-- [ ] Gitleaks / Trivy 스캔 통과 확인
-- [ ] `.env`의 `DEBUG=False`, 운영용 `SECRET_KEY` 설정 확인
-- [ ] `ALLOWED_HOSTS`에 실제 도메인 반영
-- [ ] Docker Hub 시크릿, GCP Workload Identity Federation 설정 최신 상태 확인
-- [ ] DB, Redis가 nginx를 거치지 않고 외부에 노출되지 않는지 확인 (`docker-compose.yml`의 `db`, `redis` 포트는 `127.0.0.1`에만 바인딩되어 있어 로컬 툴 접속용으로만 열려 있고 LAN/외부에는 노출되지 않음)
+```python
+from config.health import healthz
+
+urlpatterns = [
+    path("healthz", healthz),
+    # 기존 URL은 그대로 둔다.
+]
+```
+
+### 백엔드 settings.py 수정
+
+현재 백엔드 주석은 DEBUG 기본값이 False라고 적혀 있지만 실제 코드는 `True`다. 다음처럼 실제 기본값도 False로 바꾼다.
+
+```python
+DEBUG = os.getenv("DJANGO_DEBUG", "False").lower() == "true"
+```
+
+기존 앱·JWT·dotenv·DB·Redis 설정은 지우지 말고 다음 운영 보안 설정을 추가한다.
+
+```python
+SECURE_SSL_REDIRECT = not DEBUG
+SESSION_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SECURE = not DEBUG
+SECURE_HSTS_SECONDS = 0 if DEBUG else 31536000
+SECURE_HSTS_INCLUDE_SUBDOMAINS = not DEBUG
+SECURE_HSTS_PRELOAD = not DEBUG
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+```
+
+### 백엔드에 넣지 않을 파일
+
+PR #1의 오래된 `.github/workflows/ci.yml`은 옮기지 않는다. 중앙 파일 전체를 복사하지 않고 `docs/backend-workflow-example.yml`의 짧은 호출 파일만 둔다.
+
+## 3단계: 처음에는 CI만 연결
+
+`docs/backend-workflow-example.yml`은 모든 브랜치 push와 `main`·`develop` 대상 PR에서 CI를 실행한다. 이 단계에는 Docker Hub나 GCP Secret이 필요 없다.
+
+현재 최신 백엔드는 Black 기준으로 여러 기존 파일을 다시 포맷해야 한다. DevSecOps PR에 수십 개의 기계적 포맷 변경을 섞지 않기 위해 첫 호출은 기본값 `enforce_black: false`를 사용한다. 이후 포맷만 정리한 별도 PR을 병합하고 다음 입력을 추가한다.
+
+```yaml
+jobs:
+  ci:
+    uses: MSG-CTF/jm_devsecops/.github/workflows/reusable-ci.yml@v2.0.0
+    with:
+      enforce_black: true
+```
+
+다음 조건을 모두 확인하기 전에는 deploy job을 추가하지 않는다.
+
+- Cloud SQL 인스턴스와 데이터베이스가 준비됨
+- Cloud Run에서 Cloud SQL로 연결할 방법이 준비됨
+- Redis가 준비되고 Cloud Run에서 접근 가능함
+- `django-secret-key`, `jwt-secret`, `postgres-password`가 Secret Manager에 존재함
+- 각 Secret의 `latest`가 아닌 숫자 버전을 정함
+- 운영 migration을 Cloud Run Job 등으로 먼저 적용하는 절차가 준비됨
+- GitHub `production` Environment에 승인 규칙을 설정함
+- Workload Identity 조건이 `MSG-CTF/msg-backend`, `main` ref와 중앙 `reusable-cd.yml@v2.0.0` 호출만 허용함
+- Cloud Run URL 또는 운영 도메인을 `DJANGO_ALLOWED_HOSTS`에 넣음
+- `/healthz`가 인증 없이 200을 반환함
+
+## 4단계: CD를 나중에 켜는 방법
+
+위 준비가 끝나면 백엔드 호출 파일의 최상위 권한에 `id-token: write`를 추가하고 다음 job을 붙인다.
+
+```yaml
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: ci
+    uses: MSG-CTF/jm_devsecops/.github/workflows/reusable-cd.yml@v2.0.0
+    with:
+      commit_sha: ${{ github.sha }}
+      dockerhub_username: ${{ vars.DOCKERHUB_USERNAME }}
+      image_name: ctf-backend
+      cloud_run_service: ctf-backend
+      region: asia-northeast3
+      deployment_environment: production
+      django_allowed_hosts: ${{ vars.DJANGO_ALLOWED_HOSTS }}
+      healthcheck_host: ${{ vars.HEALTHCHECK_HOST }}
+      postgres_db: ${{ vars.POSTGRES_DB }}
+      postgres_user: ${{ vars.POSTGRES_USER }}
+      postgres_host: ${{ vars.POSTGRES_HOST }}
+      postgres_port: "5432"
+      redis_url: ${{ vars.REDIS_URL }}
+      django_secret_version: ${{ vars.DJANGO_SECRET_VERSION }}
+      jwt_secret_version: ${{ vars.JWT_SECRET_VERSION }}
+      postgres_password_secret_version: ${{ vars.POSTGRES_PASSWORD_SECRET_VERSION }}
+    secrets:
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+```
+
+`secrets: inherit`는 사용하지 않는다. 호출받은 워크플로에 필요한 Secret 세 개만 명시적으로 전달한다.
+
+CD는 다음 순서로 동작한다.
+
+1. 배포할 commit SHA와 Secret 버전 번호를 검증한다.
+2. Gitleaks를 다시 실행한다.
+3. 이미지를 commit SHA 태그로 빌드한다.
+4. Trivy를 통과한 이미지만 Docker Hub에 push한다.
+5. push된 이미지의 digest를 구한다.
+6. GitHub `production` Environment 승인 규칙을 거친다.
+7. GCP Workload Identity Federation으로 인증한다.
+8. Secret Manager의 고정 숫자 버전을 환경변수로 연결한다.
+9. Cloud Run에는 태그가 아니라 digest로 배포한다.
+10. 배포 URL의 `/healthz`를 확인한다.
+
+주의: 현재 reusable CD는 운영 migration 자체를 실행하지 않는다. migration용 Cloud Run Job을 만들고 검증하기 전에는 이 deploy job을 켜면 안 된다.
+
+## 5단계: 중앙 버전 공개와 백엔드 PR 순서
+
+1. 중앙 저장소에서 `actionlint`, Django 테스트, Docker 실행 검사를 통과시킨다.
+2. 중앙 변경을 `main`에 push한다.
+3. GitHub Actions 결과가 모두 통과한 것을 확인한다.
+4. 그 통과한 commit에만 `v2.0.0` 태그를 만든다.
+5. 백엔드 최신 `main`에서 만든 `chore/devsecops-v2` 브랜치에 위 백엔드 파일을 추가한다.
+6. 백엔드 CI가 실제로 모든 검사를 실행하고 통과하는지 로그를 확인한다.
+7. 새 백엔드 PR을 만든다.
+8. PR #1에 새 PR 링크와 대체 이유를 댓글로 남긴다.
+9. 필요한 변경이 새 PR에 모두 있는지 확인한 다음 PR #1을 닫는다.
+10. 마지막에 PR #1의 예전 브랜치를 삭제한다.
+
+## Branch protection
+
+백엔드 `main`의 Branch protection 또는 Ruleset에서 첫 CI 실행 후 표시되는 검사 중 아래 이름으로 끝나는 세 작업을 필수 검사로 지정한다. GitHub 화면에서는 호출 job 이름이 앞에 붙어 더 길게 보일 수 있다.
+
+```text
+security-scan
+lint-and-test
+docker-build-check
+```
+
+이 설정이 없으면 CI가 실패해도 사람이 그냥 merge할 수 있으므로 진짜 병합 게이트가 아니다.
+
+## 실패했을 때 확인할 곳
+
+- Gitleaks 실패: 노출된 자격증명을 즉시 폐기하고 Git 기록에서도 제거한다.
+- Trivy 실패: `requirements.txt` 또는 베이스 이미지 digest를 안전한 버전으로 갱신한다.
+- migration 실패: 모델 변경에 해당하는 migration이 커밋됐는지 확인한다.
+- PostgreSQL 실패: `POSTGRES_*` 이름과 migration을 확인한다.
+- Redis 실패: `REDIS_URL`과 Django `CACHES` 설정을 확인한다.
+- Docker health 실패: `HEALTHCHECK_HOST`가 `DJANGO_ALLOWED_HOSTS`에 포함됐는지 확인한다.
+- Cloud Run 실패: revision 로그, `$PORT`, Secret 버전과 DB·Redis 네트워크 연결을 확인한다.
+- 배포 후 health 실패: 새 revision에 트래픽을 보내지 않도록 이전 정상 revision으로 롤백한다.

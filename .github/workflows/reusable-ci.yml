@@ -2,6 +2,40 @@ name: Reusable Django CI
 
 on:
   workflow_call:
+    inputs:
+      python_version:
+        description: 테스트에 사용할 Python 버전
+        required: false
+        default: "3.12.10"
+        type: string
+      health_path:
+        description: 컨테이너 기동 후 확인할 HTTP 경로
+        required: false
+        default: /healthz
+        type: string
+      enforce_black:
+        description: Black 포맷 오류로 CI를 실패시킬지 여부
+        required: false
+        default: false
+        type: boolean
+
+env:
+  # msg-backend가 사용하는 이름과 기존 예제 프로젝트가 사용하는 이름을 함께 제공한다.
+  DJANGO_SECRET_KEY: ci-only-django-key-0123456789abcdef-do-not-use-in-production
+  DJANGO_DEBUG: "False"
+  DJANGO_ALLOWED_HOSTS: example.com
+  JWT_SECRET: ci-only-jwt-key-0123456789abcdef-do-not-use-in-production
+  SECRET_KEY: ci-only-django-key-0123456789abcdef-do-not-use-in-production
+  DEBUG: "False"
+  ALLOWED_HOSTS: example.com
+  POSTGRES_DB: ctf_db_test
+  POSTGRES_USER: ctf_user
+  POSTGRES_PASSWORD: ctf_password_secure_123
+  POSTGRES_HOST: localhost
+  POSTGRES_PORT: "5432"
+  DATABASE_HOST: localhost
+  DATABASE_PORT: "5432"
+  REDIS_URL: redis://localhost:6379/0
 
 jobs:
   security-scan:
@@ -12,20 +46,19 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       with:
         fetch-depth: 0
 
     - name: Gitleaks 시크릿 스캔
-      # dir이 아닌 git 모드 - 커밋 히스토리까지 스캔해야 지웠다 되살릴 수 있는 시크릿을 잡는다
       run: |
         docker run --rm \
-          -v "$PWD:/repo" \
-          ghcr.io/gitleaks/gitleaks:v8.30.1 \
+          -v "${GITHUB_WORKSPACE}:/repo" \
+          ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
           git /repo --redact --verbose
 
     - name: Trivy 파일시스템 취약점 차단 검사 (Critical, High)
-      uses: aquasecurity/trivy-action@v0.36.0
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
       with:
         version: v0.72.0
         scan-type: fs
@@ -35,15 +68,16 @@ jobs:
         ignore-unfixed: true
         exit-code: "1"
 
-    - name: Trivy 파일시스템 SARIF 생성
+    - name: Trivy 파일시스템 SARIF 생성 (수정본 없는 취약점 포함)
       if: always()
-      uses: aquasecurity/trivy-action@v0.36.0
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
       with:
         version: v0.72.0
         scan-type: fs
         scan-ref: .
         scanners: vuln
-        ignore-unfixed: true
+        severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+        ignore-unfixed: false
         format: sarif
         output: trivy-fs-results.sarif
         exit-code: "0"
@@ -51,7 +85,7 @@ jobs:
     - name: Trivy SARIF 업로드
       if: always()
       continue-on-error: true
-      uses: github/codeql-action/upload-sarif@v3
+      uses: github/codeql-action/upload-sarif@42947a340483f03ba47bb1a039b2c519aab3df85 # v3
       with:
         sarif_file: trivy-fs-results.sarif
         category: trivy-filesystem
@@ -61,7 +95,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16.14@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b
         env:
           POSTGRES_DB: ctf_db_test
           POSTGRES_USER: ctf_user
@@ -75,7 +109,7 @@ jobs:
           --health-retries 5
 
       redis:
-        image: redis:7
+        image: redis:7.2@sha256:cbbf906f1c3abe4959f4c2bed45706eae7f89802a8a9fe105f252032f4eb864a
         ports:
           - 6379:6379
         options: >-
@@ -86,54 +120,77 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-    - name: Set up Python 3.12.10
-      uses: actions/setup-python@v5
+    - name: 필수 Django 파일 확인
+      run: |
+        test -f manage.py || { echo "manage.py가 없습니다."; exit 1; }
+        test -f requirements.txt || { echo "requirements.txt가 없습니다."; exit 1; }
+
+    - name: Set up Python
+      uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
       with:
-        python-version: "3.12.10"
+        python-version: ${{ inputs.python_version }}
         cache: pip
 
-    - name: Install dependencies
+    - name: 의존성과 CI 검사 도구 설치
       run: |
         python -m pip install --upgrade pip
-        if [ -f requirements.txt ]; then
-          pip install -r requirements.txt
-        fi
+        python -m pip install -r requirements.txt
+        python -m pip install black==25.1.0 flake8==7.2.0 redis==8.0.1
 
-    - name: Run Linter (Black & Flake8)
+    - name: Black 포맷 보고서 (전환 기간에는 경고)
+      if: ${{ !inputs.enforce_black }}
+      continue-on-error: true
+      run: black --check .
+
+    - name: Black 포맷 병합 차단
+      if: ${{ inputs.enforce_black }}
+      run: black --check .
+
+    - name: Flake8 치명적 오류 검사
+      run: flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+
+    - name: PostgreSQL 실제 연결과 쿼리 확인
+      run: >-
+        python manage.py shell -c
+        "from django.db import connection;
+        cursor = connection.cursor();
+        cursor.execute('SELECT 1');
+        assert cursor.fetchone()[0] == 1;
+        cursor.close()"
+
+    - name: 누락된 migration 확인
+      run: python manage.py makemigrations --check --dry-run
+
+    - name: migration 실제 적용
+      run: python manage.py migrate --noinput
+
+    - name: Redis 저장과 조회 확인
       run: |
-        if [ -d "app" ] || ls ./*.py 1> /dev/null 2>&1; then
-          echo "Running Lint checks..."
-          black --check . || true
-          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-        else
-          echo "No python files found to lint. Skipping."
+        python -c "import redis; client = redis.Redis.from_url('${REDIS_URL}'); client.set('ci:ping', 'pong', ex=60); assert client.get('ci:ping') == b'pong'; client.delete('ci:ping')"
+        if grep -Eq '^django-redis([=<>~!]|$)' requirements.txt; then
+          python manage.py shell -c "from django.core.cache import cache; cache.set('ci:django-cache', 'pong', 60); assert cache.get('ci:django-cache') == 'pong'; cache.delete('ci:django-cache')"
         fi
 
-    - name: Run Tests
+    - name: Django 테스트 실행 및 0개 테스트 방지
+      shell: bash
       env:
-        DEBUG: "False"
-        SECRET_KEY: django-insecure-ci-test-key-do-not-use-in-prod
-        POSTGRES_DB: ctf_db_test
-        POSTGRES_USER: ctf_user
-        POSTGRES_PASSWORD: ctf_password_secure_123
-        DATABASE_HOST: localhost
-        DATABASE_PORT: 5432
-        REDIS_URL: redis://localhost:6379/0
+        # 기존 API 테스트는 HTTP test client를 사용한다. HTTPS 강제 여부는 아래 deploy check에서 별도로 검사한다.
+        DJANGO_DEBUG: "True"
+        DEBUG: "True"
       run: |
-        if [ -f manage.py ]; then
-          python manage.py test
-        else
-          echo "manage.py not found. Django project might not be created yet. Skipping tests."
+        set -o pipefail
+        python manage.py test --verbosity 2 2>&1 | tee "${RUNNER_TEMP}/django-tests.log"
+        if ! grep -Eq 'Ran [1-9][0-9]* tests?' "${RUNNER_TEMP}/django-tests.log"; then
+          echo "실행된 테스트가 0개이거나 테스트 수를 확인할 수 없습니다."
+          exit 1
         fi
 
-    - name: Django 배포 보안 점검 (check --deploy)
-      if: hashFiles('manage.py') != ''
+    - name: Django 배포 보안 점검
       env:
+        DJANGO_DEBUG: "False"
         DEBUG: "False"
-        SECRET_KEY: ci-only-key-not-used-anywhere-else-0123456789abcdef
-        ALLOWED_HOSTS: example.com
       run: python manage.py check --deploy --fail-level WARNING
 
   docker-build-check:
@@ -144,22 +201,66 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+    - name: Dockerfile 필수 확인
+      run: test -f Dockerfile || { echo "루트 Dockerfile이 없습니다."; exit 1; }
 
     - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
+      uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
-    - name: Test Docker Build
+    - name: 테스트 이미지 빌드
+      run: docker build . --file Dockerfile --tag ctf-backend:test
+
+    - name: 비루트 사용자와 Docker HEALTHCHECK 확인
       run: |
-        if [ -f Dockerfile ]; then
-          docker build . --file Dockerfile --tag ctf-backend:test
-        else
-          echo "Dockerfile not found. Skipping docker build."
+        container_user="$(docker image inspect ctf-backend:test --format '{{.Config.User}}')"
+        if [ -z "$container_user" ] || [ "$container_user" = "0" ] || [ "$container_user" = "root" ]; then
+          echo "컨테이너가 root 사용자로 실행되도록 설정되어 있습니다."
+          exit 1
+        fi
+        healthcheck="$(docker image inspect ctf-backend:test --format '{{json .Config.Healthcheck.Test}}')"
+        if [ "$healthcheck" = "null" ] || [ -z "$healthcheck" ]; then
+          echo "Dockerfile에 HEALTHCHECK가 없습니다."
+          exit 1
         fi
 
+    - name: 운영과 같은 Host로 컨테이너 기동 확인
+      env:
+        HEALTH_PATH: ${{ inputs.health_path }}
+      run: |
+        docker run --detach --name ctf-backend-ci \
+          --publish 127.0.0.1:18080:8080 \
+          --env PORT=8080 \
+          --env DJANGO_SECRET_KEY=ci-only-django-key-0123456789abcdef \
+          --env DJANGO_DEBUG=False \
+          --env DJANGO_ALLOWED_HOSTS=example.com \
+          --env HEALTHCHECK_HOST=example.com \
+          --env JWT_SECRET=ci-only-jwt-key-0123456789abcdef \
+          --env SECRET_KEY=ci-only-django-key-0123456789abcdef \
+          --env DEBUG=False \
+          --env ALLOWED_HOSTS=example.com \
+          ctf-backend:test
+
+        for _attempt in {1..20}; do
+          if curl --fail --silent --show-error \
+            --header 'Host: example.com' \
+            --header 'X-Forwarded-Proto: https' \
+            "http://127.0.0.1:18080${HEALTH_PATH}"; then
+            exit 0
+          fi
+          sleep 2
+        done
+
+        docker logs ctf-backend-ci
+        exit 1
+
+    - name: 테스트 컨테이너 정리
+      if: always()
+      run: docker rm --force ctf-backend-ci 2>/dev/null || true
+
     - name: Trivy 이미지 취약점/시크릿 차단 검사 (Critical, High)
-      if: hashFiles('Dockerfile') != ''
-      uses: aquasecurity/trivy-action@v0.36.0
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
       with:
         version: v0.72.0
         image-ref: ctf-backend:test
@@ -168,23 +269,23 @@ jobs:
         ignore-unfixed: true
         exit-code: "1"
 
-    - name: Trivy 이미지 SARIF 생성
-      if: always() && hashFiles('Dockerfile') != ''
-      uses: aquasecurity/trivy-action@v0.36.0
+    - name: Trivy 이미지 SARIF 생성 (수정본 없는 취약점 포함)
+      if: always()
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
       with:
         version: v0.72.0
         image-ref: ctf-backend:test
         scanners: vuln,secret
-        ignore-unfixed: true
+        severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+        ignore-unfixed: false
         format: sarif
         output: trivy-image-results.sarif
         exit-code: "0"
 
     - name: Trivy 이미지 SARIF 업로드
-      if: always() && hashFiles('Dockerfile') != ''
+      if: always()
       continue-on-error: true
-      uses: github/codeql-action/upload-sarif@v3
+      uses: github/codeql-action/upload-sarif@42947a340483f03ba47bb1a039b2c519aab3df85 # v3
       with:
         sarif_file: trivy-image-results.sarif
         category: trivy-image
-

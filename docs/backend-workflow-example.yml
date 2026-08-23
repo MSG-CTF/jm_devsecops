@@ -1,5 +1,6 @@
 # 이 파일을 백엔드 저장소의 .github/workflows/ci-cd.yml로 복사한다.
-name: Backend CI/CD
+# 1단계에서는 CI만 사용한다. Cloud SQL·Redis·Secret Manager 준비가 끝난 뒤 deploy job을 추가한다.
+name: Backend CI
 
 on:
   push:
@@ -9,24 +10,14 @@ on:
 permissions:
   contents: read
   security-events: write
-  id-token: write
 
 concurrency:
-  group: backend-${{ github.workflow }}-${{ github.head_ref || github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  group: backend-ci-${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   ci:
-    uses: MSG-CTF/jm_devsecops/.github/workflows/reusable-ci.yml@v1.0.0
+    # v2.0.0 태그는 중앙 저장소 검증과 release가 끝난 뒤 사용한다.
+    uses: MSG-CTF/jm_devsecops/.github/workflows/reusable-ci.yml@v2.0.0
 
-  deploy:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: ci
-    uses: MSG-CTF/jm_devsecops/.github/workflows/reusable-cd.yml@v1.0.0
-    with:
-      commit_sha: ${{ github.sha }}
-      dockerhub_username: ${{ vars.DOCKERHUB_USERNAME }}
-      image_name: ctf-backend
-      cloud_run_service: ctf-backend
-      region: asia-northeast3
-    secrets: inherit
+# 2단계 CD 예제는 docs/devsecops-runbook.md의 "CD를 나중에 켜는 방법"을 따른다.

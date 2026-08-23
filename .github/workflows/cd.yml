@@ -1,29 +1,15 @@
 name: Django CD Pipeline
 
-# main에서 CI가 성공한 커밋만 공통 CD 워크플로에 전달한다.
+# 중앙 예제 프로젝트를 실수로 운영 배포하지 않도록 수동 실행만 허용한다.
+# 실제 백엔드 배포는 msg-backend가 검증된 버전의 reusable-cd.yml을 호출한다.
 on:
-  workflow_run:
-    workflows: ["Django CI Pipeline"]
-    branches: ["main"]
-    types: [completed]
+  workflow_dispatch:
 
 permissions:
   contents: read
-  security-events: write
-  id-token: write
-
-concurrency:
-  group: cd-main
-  cancel-in-progress: false
 
 jobs:
-  deploy:
-    if: github.event.workflow_run.conclusion == 'success'
-    uses: ./.github/workflows/reusable-cd.yml
-    with:
-      commit_sha: ${{ github.event.workflow_run.head_sha }}
-      dockerhub_username: ${{ vars.DOCKERHUB_USERNAME }}
-      image_name: ctf-backend
-      cloud_run_service: ctf-backend
-      region: asia-northeast3
-    secrets: inherit
+  notice:
+    runs-on: ubuntu-latest
+    steps:
+    - run: echo "백엔드 운영 인프라 준비 전에는 중앙 저장소에서 배포하지 않습니다."

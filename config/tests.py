@@ -10,3 +10,8 @@ class HealthCheckTest(SimpleTestCase):
         res = self.client.get("/", secure=True)
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json(), {"status": "ok"})
+
+    def test_healthz_returns_ok(self):
+        res = self.client.get("/healthz", secure=True, HTTP_HOST="example.com")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json(), {"status": "ok"})
