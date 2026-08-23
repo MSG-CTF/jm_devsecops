@@ -58,6 +58,7 @@ MSG-CTF/msg-backend
 4. `WARNING`과 `INFO`도 SARIF 보고서에 남겨 GitHub Code scanning에서 검토한다.
 5. Semgrep 엔진은 공식 non-root 이미지 `1.173.0`과 digest로 고정한다.
 6. `p/default` 규칙은 새로운 공격 패턴을 받기 위해 Semgrep Registry에서 갱신된다. Trivy 취약점 DB처럼 보안 정보가 갱신되면 같은 코드에서도 새 발견이 생길 수 있다.
+7. GitHub Actions 표현식처럼 특정 규칙이 해석하지 못한 파일 조각은 경고로 남기고, Semgrep 설정 오류나 실행 실패와 `ERROR` 보안 발견은 CI를 실패시킨다.
 
 CTF 페이지 자체에는 의도적인 취약 코드를 두지 않으므로 `ERROR`를 처음부터 병합 차단 대상으로 사용한다. 테스트 값이나 도구 오탐은 실제 Secret인지 먼저 확인하고, 안전하다는 근거가 있을 때만 해당 줄의 `nosemgrep` 또는 아주 좁은 `.semgrepignore` 규칙으로 제외한다. 앱 폴더 전체를 제외하지 않는다.
 
