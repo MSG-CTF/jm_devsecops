@@ -35,10 +35,6 @@ on:
         description: 쉼표로 구분한 운영 Django ALLOWED_HOSTS
         required: true
         type: string
-      healthcheck_host:
-        description: Docker 내부 HEALTHCHECK가 Host 헤더로 사용할 운영 호스트 하나
-        required: true
-        type: string
       postgres_db:
         description: 운영 PostgreSQL 데이터베이스 이름
         required: true
@@ -72,10 +68,10 @@ on:
         description: postgres-password의 고정 Secret Manager 버전 번호
         required: true
         type: string
-      health_path:
-        description: 배포 후 확인할 HTTP 경로
+      smoke_test_path:
+        description: 배포 직후 한 번 확인할 기존 Django HTTP 경로
         required: false
-        default: /healthz
+        default: /admin/login/
         type: string
     secrets:
       DOCKERHUB_TOKEN:
@@ -218,7 +214,6 @@ jobs:
         env_vars: |
           DJANGO_DEBUG=False
           DJANGO_ALLOWED_HOSTS=${{ inputs.django_allowed_hosts }}
-          HEALTHCHECK_HOST=${{ inputs.healthcheck_host }}
           POSTGRES_DB=${{ inputs.postgres_db }}
           POSTGRES_USER=${{ inputs.postgres_user }}
           POSTGRES_HOST=${{ inputs.postgres_host }}
@@ -229,17 +224,17 @@ jobs:
           JWT_SECRET=jwt-secret:${{ inputs.jwt_secret_version }}
           POSTGRES_PASSWORD=postgres-password:${{ inputs.postgres_password_secret_version }}
 
-    - name: 배포 후 healthz 확인
+    - name: 배포 후 Django 시작 확인
       env:
         SERVICE_URL: ${{ steps.deploy.outputs.url }}
-        HEALTH_PATH: ${{ inputs.health_path }}
+        SMOKE_TEST_PATH: ${{ inputs.smoke_test_path }}
       run: |
         test -n "$SERVICE_URL" || { echo "Cloud Run URL을 얻지 못했습니다."; exit 1; }
         for _attempt in {1..20}; do
-          if curl --fail --silent --show-error "${SERVICE_URL}${HEALTH_PATH}"; then
+          if curl --fail --silent --show-error --output /dev/null "${SERVICE_URL}${SMOKE_TEST_PATH}"; then
             exit 0
           fi
           sleep 3
         done
-        echo "배포 후 상태 확인에 실패했습니다. Cloud Run revision과 애플리케이션 로그를 확인하세요."
+        echo "배포 직후 Django 응답 확인에 실패했습니다. Cloud Run revision과 애플리케이션 로그를 확인하세요."
         exit 1

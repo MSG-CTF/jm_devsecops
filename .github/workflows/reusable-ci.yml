@@ -8,10 +8,10 @@ on:
         required: false
         default: "3.12.10"
         type: string
-      health_path:
-        description: 컨테이너 기동 후 확인할 HTTP 경로
+      smoke_test_path:
+        description: 컨테이너가 시작됐는지 한 번 확인할 기존 Django HTTP 경로
         required: false
-        default: /healthz
+        default: /admin/login/
         type: string
       enforce_black:
         description: Black 포맷 오류로 CI를 실패시킬지 여부
@@ -212,22 +212,17 @@ jobs:
     - name: 테스트 이미지 빌드
       run: docker build . --file Dockerfile --tag ctf-backend:test
 
-    - name: 비루트 사용자와 Docker HEALTHCHECK 확인
+    - name: 비루트 사용자 확인
       run: |
         container_user="$(docker image inspect ctf-backend:test --format '{{.Config.User}}')"
         if [ -z "$container_user" ] || [ "$container_user" = "0" ] || [ "$container_user" = "root" ]; then
           echo "컨테이너가 root 사용자로 실행되도록 설정되어 있습니다."
           exit 1
         fi
-        healthcheck="$(docker image inspect ctf-backend:test --format '{{json .Config.Healthcheck.Test}}')"
-        if [ "$healthcheck" = "null" ] || [ -z "$healthcheck" ]; then
-          echo "Dockerfile에 HEALTHCHECK가 없습니다."
-          exit 1
-        fi
 
-    - name: 운영과 같은 Host로 컨테이너 기동 확인
+    - name: 기존 Django 경로로 컨테이너 시작 확인
       env:
-        HEALTH_PATH: ${{ inputs.health_path }}
+        SMOKE_TEST_PATH: ${{ inputs.smoke_test_path }}
       run: |
         docker run --detach --name ctf-backend-ci \
           --publish 127.0.0.1:18080:8080 \
@@ -235,7 +230,6 @@ jobs:
           --env DJANGO_SECRET_KEY=ci-only-django-key-0123456789abcdef \
           --env DJANGO_DEBUG=False \
           --env DJANGO_ALLOWED_HOSTS=example.com \
-          --env HEALTHCHECK_HOST=example.com \
           --env JWT_SECRET=ci-only-jwt-key-0123456789abcdef \
           --env SECRET_KEY=ci-only-django-key-0123456789abcdef \
           --env DEBUG=False \
@@ -244,9 +238,10 @@ jobs:
 
         for _attempt in {1..20}; do
           if curl --fail --silent --show-error \
+            --output /dev/null \
             --header 'Host: example.com' \
             --header 'X-Forwarded-Proto: https' \
-            "http://127.0.0.1:18080${HEALTH_PATH}"; then
+            "http://127.0.0.1:18080${SMOKE_TEST_PATH}"; then
             exit 0
           fi
           sleep 2

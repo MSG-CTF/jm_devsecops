@@ -3,12 +3,11 @@ from django.http import JsonResponse
 from django.urls import path
 
 
-def health(request):
+def index(request):
     return JsonResponse({"status": "ok"})
 
 
 urlpatterns = [
     path("admin/", admin.site.urls),
-    path("", health),
-    path("healthz", health),
+    path("", index),
 ]

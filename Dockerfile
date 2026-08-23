@@ -22,7 +22,4 @@ USER app
 
 EXPOSE 8080
 
-HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-    CMD python -c "import os,urllib.request; port=os.environ.get('PORT','8080'); host=os.environ.get('HEALTHCHECK_HOST','localhost'); request=urllib.request.Request(f'http://127.0.0.1:{port}/healthz',headers={'Host':host,'X-Forwarded-Proto':'https'}); urllib.request.urlopen(request,timeout=2)" || exit 1
-
 CMD ["sh", "-c", "exec gunicorn config.wsgi:application --bind 0.0.0.0:${PORT:-8080} --access-logfile - --error-logfile -"]
