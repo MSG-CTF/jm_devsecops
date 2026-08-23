@@ -33,14 +33,15 @@ MSG-CTF/msg-backend
 
 ## 버전 규칙
 
-- `v1.0.0`과 `v2.0.0`은 이미 공개한 버전이므로 이동하거나 덮어쓰지 않는다.
-- `/healthz`, `health_path`, `healthcheck_host` 계약을 제거했으므로 호환되지 않는 큰 변경이다.
-- 새 계약은 로컬 검사와 GitHub Actions가 모두 통과한 commit에 `v3.0.0` 태그를 붙인다.
-- 백엔드는 `@main` 대신 검증된 `@v3.0.0`을 호출한다.
+- `v1.0.0`, `v2.0.0`, `v3.0.0`은 이미 공개한 버전이므로 이동하거나 덮어쓰지 않는다.
+- `/healthz` 계약을 제거한 버전은 `v3.0.0`이다.
+- 호환성을 깨지 않고 Semgrep SAST 검사를 추가한 버전은 `v3.1.0`이다.
+- 새 버전은 로컬 검사와 GitHub Actions가 모두 통과한 commit에만 태그를 붙인다.
+- 백엔드는 `@main` 대신 검증된 `@v3.1.0`을 호출한다.
 
 ## 1단계: 중앙 CI에서 하는 검사
 
-`reusable-ci.yml`은 다음 세 작업을 병렬로 실행한다.
+`reusable-ci.yml`은 다음 네 작업을 병렬로 실행한다.
 
 ### 보안 검사
 
@@ -48,6 +49,23 @@ MSG-CTF/msg-backend
 2. Trivy가 HIGH·CRITICAL 취약점을 검사한다.
 3. 수정 버전이 있는 HIGH·CRITICAL 취약점은 CI를 실패시킨다.
 4. 수정 버전이 아직 없는 취약점도 SARIF 보고서에는 남긴다.
+
+### Semgrep SAST 검사
+
+1. Semgrep Community Edition이 프로그램을 실행하지 않고 소스 코드를 정적 분석한다.
+2. Python·Django뿐 아니라 저장소에서 발견한 Dockerfile과 YAML에도 `p/default` 보안 규칙을 적용한다.
+3. `ERROR` 심각도 발견은 CI를 실패시킨다.
+4. `WARNING`과 `INFO`도 SARIF 보고서에 남겨 GitHub Code scanning에서 검토한다.
+5. Semgrep 엔진은 공식 non-root 이미지 `1.173.0`과 digest로 고정한다.
+6. `p/default` 규칙은 새로운 공격 패턴을 받기 위해 Semgrep Registry에서 갱신된다. Trivy 취약점 DB처럼 보안 정보가 갱신되면 같은 코드에서도 새 발견이 생길 수 있다.
+
+CTF 페이지 자체에는 의도적인 취약 코드를 두지 않으므로 `ERROR`를 처음부터 병합 차단 대상으로 사용한다. 테스트 값이나 도구 오탐은 실제 Secret인지 먼저 확인하고, 안전하다는 근거가 있을 때만 해당 줄의 `nosemgrep` 또는 아주 좁은 `.semgrepignore` 규칙으로 제외한다. 앱 폴더 전체를 제외하지 않는다.
+
+2026-08-24에 백엔드 `main` commit `42b46886d72f6146bd1b30f5d6c69fe62eaa27ef`을 미리 검사한 결과는 전체 10건, 그중 차단 대상 `ERROR` 3건이었다.
+
+- `apps/accounts/tests.py` 1건은 오래된 공개 키로 만든 위조 토큰이 거절되는지 확인하는 보안 회귀 테스트다. 실제 Secret이 아니라는 검토 근거를 남기고 그 한 줄만 규칙 ID가 포함된 `nosemgrep`으로 제외할 수 있다.
+- `koth-template` 아래 Dockerfile 2개는 비루트 `USER`가 없다는 발견이다. 템플릿으로 만들어지는 컨테이너도 실제 실행될 수 있으므로 사용자를 추가하는 것이 우선이다.
+- 나머지 `WARNING` 7건은 CI를 막지 않지만 GitHub Code scanning에서 실제 문제인지 검토해야 한다.
 
 ### Django 검사
 
@@ -147,7 +165,7 @@ SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 ```yaml
 jobs:
   ci:
-    uses: MSG-CTF/jm_devsecops/.github/workflows/reusable-ci.yml@v3.0.0
+    uses: MSG-CTF/jm_devsecops/.github/workflows/reusable-ci.yml@v3.1.0
     with:
       smoke_test_path: /admin/login/
 ```
@@ -169,7 +187,7 @@ jobs:
 - 각 Secret의 `latest`가 아닌 숫자 버전을 정함
 - 운영 migration을 Cloud Run Job 등으로 먼저 적용하는 절차가 준비됨
 - GitHub `production` Environment에 승인 규칙을 설정함
-- Workload Identity 조건이 `MSG-CTF/msg-backend`, `main` ref와 중앙 `reusable-cd.yml@v3.0.0` 호출만 허용함
+- Workload Identity 조건이 `MSG-CTF/msg-backend`, `main` ref와 중앙 `reusable-cd.yml@v3.1.0` 호출만 허용함
 - Cloud Run URL 또는 운영 도메인을 `DJANGO_ALLOWED_HOSTS`에 넣음
 - 별도 SLA 모니터링의 대상 주소, 주기, 알림 받을 사람을 정함
 
@@ -181,7 +199,7 @@ jobs:
   deploy:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: ci
-    uses: MSG-CTF/jm_devsecops/.github/workflows/reusable-cd.yml@v3.0.0
+    uses: MSG-CTF/jm_devsecops/.github/workflows/reusable-cd.yml@v3.1.0
     with:
       commit_sha: ${{ github.sha }}
       dockerhub_username: ${{ vars.DOCKERHUB_USERNAME }}
@@ -228,7 +246,7 @@ CD는 다음 순서로 동작한다.
 1. 중앙 저장소에서 `actionlint`, Django 테스트, Docker 실행 검사를 통과시킨다.
 2. 중앙 변경을 `main`에 push한다.
 3. GitHub Actions 결과가 모두 통과한 것을 확인한다.
-4. 그 통과한 commit에만 `v3.0.0` 태그를 만든다.
+4. 그 통과한 commit에만 `v3.1.0` 태그를 만든다.
 5. 백엔드 최신 `main`에서 만든 `chore/devsecops-v3` 브랜치에 백엔드용 파일을 추가한다.
 6. 백엔드 CI가 실제로 모든 검사를 실행하고 통과하는지 확인한다.
 7. 새 백엔드 PR을 만든다.
@@ -242,6 +260,7 @@ CD는 다음 순서로 동작한다.
 
 ```text
 security-scan
+sast-scan
 lint-and-test
 docker-build-check
 ```
@@ -251,6 +270,7 @@ docker-build-check
 ## 실패했을 때 확인할 곳
 
 - Gitleaks 실패: 노출된 자격증명을 즉시 폐기하고 Git 기록에서도 제거한다.
+- Semgrep 실패: 표시된 파일과 줄의 코드를 확인한다. 진짜 문제면 수정하고, 오탐이면 안전한 근거를 PR에 적은 뒤 가장 좁은 범위로 제외한다.
 - Trivy 실패: `requirements.txt` 또는 베이스 이미지 digest를 안전한 버전으로 갱신한다.
 - migration 실패: 모델 변경에 해당하는 migration이 커밋됐는지 확인한다.
 - PostgreSQL 실패: `POSTGRES_*` 이름과 migration을 확인한다.

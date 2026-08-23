@@ -90,6 +90,70 @@ jobs:
         sarif_file: trivy-fs-results.sarif
         category: trivy-filesystem
 
+  sast-scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+    - name: Semgrep SAST 검사 및 SARIF 생성
+      run: |
+        docker run --rm \
+          --volume "${GITHUB_WORKSPACE}:/src:ro" \
+          --workdir /src \
+          semgrep/semgrep:1.173.0-nonroot@sha256:ae85c429145ef6b29c7a47b4cdec78304f9b325f75ce0ee4a797e841206e3e68 \
+          semgrep scan \
+          --config p/default \
+          --oss-only \
+          --metrics=off \
+          --disable-version-check \
+          --strict \
+          --sarif . > semgrep-results.sarif
+
+        error_findings="$(
+          jq '[
+            .runs[] as $run
+            | $run.results[]?
+            | .ruleId as $rule_id
+            | $run.tool.driver.rules[]?
+            | select(
+                .id == $rule_id
+                and .defaultConfiguration.level == "error"
+              )
+          ] | length' semgrep-results.sarif
+        )"
+
+        if [ "$error_findings" -gt 0 ]; then
+          echo "Semgrep ERROR 심각도 발견 ${error_findings}건으로 CI를 실패시킵니다."
+          jq -r '
+            .runs[] as $run
+            | $run.results[]?
+            | . as $result
+            | .ruleId as $rule_id
+            | $run.tool.driver.rules[]?
+            | select(
+                .id == $rule_id
+                and .defaultConfiguration.level == "error"
+              )
+            | "- \($rule_id): \($result.locations[0].physicalLocation.artifactLocation.uri):\($result.locations[0].physicalLocation.region.startLine)"
+          ' semgrep-results.sarif
+          exit 1
+        fi
+
+        echo "Semgrep ERROR 심각도 발견이 없습니다."
+
+    - name: Semgrep SARIF 업로드
+      if: always()
+      continue-on-error: true
+      uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4
+      with:
+        sarif_file: semgrep-results.sarif
+        category: semgrep-sast
+
   lint-and-test:
     runs-on: ubuntu-latest
 
