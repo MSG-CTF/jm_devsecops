@@ -128,7 +128,7 @@ jobs:
           git /repo --redact --verbose
 
     - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
     - name: 이미지 이름 설정
       id: image
@@ -138,7 +138,7 @@ jobs:
       run: echo "image=${DOCKERHUB_USERNAME}/${IMAGE_NAME}" >> "$GITHUB_OUTPUT"
 
     - name: 검사할 이미지 빌드
-      uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+      uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
       with:
         context: .
         file: ./Dockerfile
@@ -179,7 +179,7 @@ jobs:
         category: trivy-cd-image
 
     - name: Log in to Docker Hub
-      uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+      uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
       with:
         username: ${{ inputs.dockerhub_username }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -203,14 +203,14 @@ jobs:
       id-token: write
     steps:
     - name: GCP 인증 (Workload Identity Federation)
-      uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2
+      uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
       with:
         workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
         service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
     - name: Cloud Run 배포
       id: deploy
-      uses: google-github-actions/deploy-cloudrun@251330ba9a8a34bfbc1622895f42e1d53fd14522 # v2
+      uses: google-github-actions/deploy-cloudrun@2028e2d7d30a78c6910e0632e48dd561b064884d # v3
       with:
         service: ${{ inputs.cloud_run_service }}
         region: ${{ inputs.region }}
