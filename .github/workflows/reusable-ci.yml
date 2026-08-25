@@ -101,6 +101,8 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
     - name: Semgrep SAST 검사 및 SARIF 생성
+      id: semgrep
+      continue-on-error: true
       run: |
         docker run --rm \
           --volume "${GITHUB_WORKSPACE}:/src:ro" \
@@ -153,6 +155,63 @@ jobs:
         sarif_file: semgrep-results.sarif
         category: semgrep-sast
 
+    - name: Bandit용 Python 설정
+      if: always()
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      with:
+        python-version: ${{ inputs.python_version }}
+
+    - name: Bandit 설치
+      if: always()
+      run: |
+        python -m pip install --upgrade pip==26.2.1
+        python -m pip install bandit==1.9.4
+
+    - name: Bandit Python SAST 검사
+      id: bandit
+      if: always()
+      continue-on-error: true
+      run: |
+        bandit_exit=0
+        bandit -r . --format json --output bandit-results.json || bandit_exit="$?"
+
+        if [ "$bandit_exit" -gt 1 ]; then
+          echo "Bandit 실행 자체가 실패했습니다. exit=${bandit_exit}"
+          exit "$bandit_exit"
+        fi
+
+        total_findings="$(jq '.results | length' bandit-results.json)"
+        blocking_findings="$(
+          jq '[
+            .results[]
+            | select(
+                (.issue_severity == "MEDIUM" or .issue_severity == "HIGH")
+                and (.issue_confidence == "MEDIUM" or .issue_confidence == "HIGH")
+              )
+          ] | length' bandit-results.json
+        )"
+
+        echo "Bandit 전체 발견: ${total_findings}건"
+        echo "Bandit 차단 대상(MEDIUM/HIGH severity + MEDIUM/HIGH confidence): ${blocking_findings}건"
+
+        jq -r '
+          .results[]
+          | "- [\(.issue_severity)/\(.issue_confidence)] \(.test_id) \(.filename):\(.line_number) - \(.issue_text)"
+        ' bandit-results.json
+
+        if [ "$blocking_findings" -gt 0 ]; then
+          exit 1
+        fi
+
+    - name: SAST 최종 차단 결과
+      if: always()
+      env:
+        SEMGREP_OUTCOME: ${{ steps.semgrep.outcome }}
+        BANDIT_OUTCOME: ${{ steps.bandit.outcome }}
+      run: |
+        test "$SEMGREP_OUTCOME" = "success" || { echo "Semgrep 검사가 실패했습니다."; exit 1; }
+        test "$BANDIT_OUTCOME" = "success" || { echo "Bandit 검사가 실패했습니다."; exit 1; }
+
   lint-and-test:
     runs-on: ubuntu-latest
 
@@ -198,7 +257,7 @@ jobs:
 
     - name: 의존성과 CI 검사 도구 설치
       run: |
-        python -m pip install --upgrade pip
+        python -m pip install --upgrade pip==26.2.1
         python -m pip install -r requirements.txt
         python -m pip install black==25.1.0 flake8==7.2.0 redis==8.0.1
 

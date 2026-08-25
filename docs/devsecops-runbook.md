@@ -37,8 +37,9 @@ MSG-CTF/msg-backend
 - `/healthz` 계약을 제거한 버전은 `v3.0.0`이다.
 - 호환성을 깨지 않고 Semgrep SAST 검사를 추가한 버전은 `v3.1.0`이다.
 - 알려진 Django 취약점과 컨테이너 기반 이미지 취약점을 제거하고, 수정본 없는 HIGH·CRITICAL도 차단하도록 강화한 버전은 `v3.2.0`이다.
+- Python 전용 Bandit SAST를 추가한 버전은 `v3.3.0`이다.
 - 새 버전은 로컬 검사와 GitHub Actions가 모두 통과한 commit에만 태그를 붙인다.
-- 백엔드는 `@main` 대신 검증된 `@v3.2.0`을 호출한다.
+- 백엔드는 `@main` 대신 검증된 `@v3.3.0`을 호출한다.
 
 ## 1단계: 중앙 CI에서 하는 검사
 
@@ -62,6 +63,19 @@ MSG-CTF/msg-backend
 7. GitHub Actions 표현식처럼 특정 규칙이 해석하지 못한 파일 조각은 경고로 남기고, Semgrep 설정 오류나 실행 실패와 `ERROR` 보안 발견은 CI를 실패시킨다.
 
 CTF 페이지 자체에는 의도적인 취약 코드를 두지 않으므로 `ERROR`를 처음부터 병합 차단 대상으로 사용한다. 테스트 값이나 도구 오탐은 실제 Secret인지 먼저 확인하고, 안전하다는 근거가 있을 때만 해당 줄의 `nosemgrep` 또는 아주 좁은 `.semgrepignore` 규칙으로 제외한다. 앱 폴더 전체를 제외하지 않는다.
+
+### Bandit Python SAST 검사
+
+1. Bandit 1.9.4가 Python 코드를 AST 단위로 검사한다.
+2. 테스트에 쓰는 고정 비밀번호처럼 LOW 등급인 발견은 병합을 막지 않는다.
+3. 심각도와 신뢰도가 모두 MEDIUM 이상인 발견은 `sast-scan` 작업을 실패시킨다.
+4. Semgrep은 Python·Django·Dockerfile·YAML까지 넓게 보고, Bandit은 Python 보안 실수를 더 집중해서 본다. 두 도구의 규칙이 완전히 같지 않기 때문에 함께 사용한다.
+5. 두 도구 중 하나라도 실패하면 기존 `sast-scan` 작업이 실패한다. Branch protection 작업 이름은 바뀌지 않는다.
+
+2026-08-25 백엔드 `main` 사전 검사에서는 Bandit 발견 26건 중 LOW 24건과 MEDIUM 2건이 확인됐다. LOW 24건은 테스트용 비밀번호 문자열이고 현재 차단 대상이 아니다. MEDIUM 2건은 다음 URL 요청 코드이며, 허용할 URL scheme과 host를 검사한 다음 안전 근거가 있는 정확한 `urlopen` 줄에만 `# nosec B310`을 붙여야 한다.
+
+- `apps/instances/services.py`의 Scheduler 요청
+- `koth-template/prob/for_organizer/checker/checker.py`의 문제 인스턴스 요청
 
 2026-08-25에 백엔드 `main` commit `8483264685cf0ebfe4836f1b4444f0bb66b0d0e6`을 미리 검사한 결과는 전체 11건, 그중 차단 대상 `ERROR` 3건이었다.
 
@@ -167,7 +181,7 @@ SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 ```yaml
 jobs:
   ci:
-    uses: MSG-CTF/jm_devsecops/.github/workflows/reusable-ci.yml@v3.2.0
+    uses: MSG-CTF/jm_devsecops/.github/workflows/reusable-ci.yml@v3.3.0
     with:
       smoke_test_path: /admin/login/
 ```
@@ -189,7 +203,7 @@ jobs:
 - 각 Secret의 `latest`가 아닌 숫자 버전을 정함
 - 운영 migration을 Cloud Run Job 등으로 먼저 적용하는 절차가 준비됨
 - GitHub `production` Environment에 승인 규칙을 설정함
-- Workload Identity 조건이 `MSG-CTF/msg-backend`, `main` ref와 중앙 `reusable-cd.yml@v3.2.0` 호출만 허용함
+- Workload Identity 조건이 `MSG-CTF/msg-backend`, `main` ref와 중앙 `reusable-cd.yml@v3.3.0` 호출만 허용함
 - Cloud Run URL 또는 운영 도메인을 `DJANGO_ALLOWED_HOSTS`에 넣음
 - 별도 SLA 모니터링의 대상 주소, 주기, 알림 받을 사람을 정함
 
@@ -201,7 +215,7 @@ jobs:
   deploy:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: ci
-    uses: MSG-CTF/jm_devsecops/.github/workflows/reusable-cd.yml@v3.2.0
+    uses: MSG-CTF/jm_devsecops/.github/workflows/reusable-cd.yml@v3.3.0
     with:
       commit_sha: ${{ github.sha }}
       dockerhub_username: ${{ vars.DOCKERHUB_USERNAME }}
@@ -248,7 +262,7 @@ CD는 다음 순서로 동작한다.
 1. 중앙 저장소에서 `actionlint`, Django 테스트, Docker 실행 검사를 통과시킨다.
 2. 중앙 변경을 `main`에 push한다.
 3. GitHub Actions 결과가 모두 통과한 것을 확인한다.
-4. 그 통과한 commit에만 아직 사용하지 않은 새 버전 태그를 만든다. 이 변경은 `v3.2.0`이다.
+4. 그 통과한 commit에만 아직 사용하지 않은 새 버전 태그를 만든다. Bandit 추가 변경은 `v3.3.0`이다.
 5. 백엔드 최신 `main`에서 만든 `chore/devsecops-v3` 브랜치에 백엔드용 파일을 추가한다.
 6. 백엔드 CI가 실제로 모든 검사를 실행하고 통과하는지 확인한다.
 7. 새 백엔드 PR을 만든다.
