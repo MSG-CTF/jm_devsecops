@@ -13,10 +13,14 @@ if not SECRET_KEY:
 
 DEBUG = os.environ.get("DEBUG", "False") == "True"
 ALLOWED_HOSTS = [
-    host.strip() for host in os.environ.get("ALLOWED_HOSTS", "").split(",") if host.strip()
+    host.strip()
+    for host in os.environ.get("ALLOWED_HOSTS", "").split(",")
+    if host.strip()
 ]
 if not ALLOWED_HOSTS:
-    raise ImproperlyConfigured("ALLOWED_HOSTS 환경변수가 필요합니다 (.env.example 참고)")
+    raise ImproperlyConfigured(
+        "ALLOWED_HOSTS 환경변수가 필요합니다 (.env.example 참고)"
+    )
 if not DEBUG and "*" in ALLOWED_HOSTS:
     raise ImproperlyConfigured("운영 환경에서는 ALLOWED_HOSTS에 *를 사용할 수 없습니다")
 
