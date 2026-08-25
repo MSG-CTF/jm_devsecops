@@ -134,6 +134,18 @@ docs/backend-files/.dockerignore    → msg-backend/.dockerignore
 docs/backend-workflow-example.yml   → msg-backend/.github/workflows/ci-cd.yml
 ```
 
+현재 백엔드의 `docker-compose.yml`은 PostgreSQL과 Redis 컨테이너만 실행하며 Django 앱을 빌드하는 `web` 서비스가 없다. 이 파일은 여러 컨테이너의 실행 순서를 정하는 역할이고, Django 앱 이미지의 제작법은 담고 있지 않다. 따라서 루트 `Dockerfile`은 별도로 반드시 추가해야 한다. 나중에 Compose에 Django를 넣더라도 다음처럼 결국 같은 Dockerfile을 사용한다.
+
+```yaml
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+```
+
+개발용 Compose의 PostgreSQL 비밀번호 `1234`는 운영에 사용하지 않는다. 운영 비밀번호는 GitHub에 커밋하지 않고 Secret Manager에서 주입한다.
+
 `config/health.py`, `/healthz` URL, 전용 테스트는 추가하지 않는다.
 
 백엔드 `requirements.txt`에는 Gunicorn 고정 버전을 추가하고, 2026-08-25 SCA에서 확인한 Django와 sqlparse 취약 버전을 올린다.
