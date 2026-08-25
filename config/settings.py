@@ -9,7 +9,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # 운영은 GCP Secret Manager(django-secret-key), 그 외는 .env / CI 환경변수로 주입한다.
 SECRET_KEY = os.environ.get("SECRET_KEY")
 if not SECRET_KEY:
-    raise ImproperlyConfigured("SECRET_KEY 환경변수가 필요합니다 (.env.example 참고)")
+    raise ImproperlyConfigured("SECRET_KEY 환경변수가 필요합니다")
 
 DEBUG = os.environ.get("DEBUG", "False") == "True"
 ALLOWED_HOSTS = [
@@ -18,9 +18,7 @@ ALLOWED_HOSTS = [
     if host.strip()
 ]
 if not ALLOWED_HOSTS:
-    raise ImproperlyConfigured(
-        "ALLOWED_HOSTS 환경변수가 필요합니다 (.env.example 참고)"
-    )
+    raise ImproperlyConfigured("ALLOWED_HOSTS 환경변수가 필요합니다")
 if not DEBUG and "*" in ALLOWED_HOSTS:
     raise ImproperlyConfigured("운영 환경에서는 ALLOWED_HOSTS에 *를 사용할 수 없습니다")
 
