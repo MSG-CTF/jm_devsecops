@@ -1,16 +1,17 @@
-FROM python:3.12-slim@sha256:2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a
+FROM python:3.12-alpine@sha256:d09d15e60962ca365d1cd544a48773bac9d33f2fb1b00f2aa0deec78ade7dc31
 
-RUN apt-get update \
-    && apt-get upgrade --yes \
-    && rm -rf /var/lib/apt/lists/*
+RUN apk upgrade --no-cache
 
 WORKDIR /app
 
 COPY requirements.txt .
-RUN python -m pip install --no-cache-dir -r requirements.txt
+RUN python -m pip install --no-cache-dir --upgrade pip==26.2.1 \
+    && python -m pip install --no-cache-dir -r requirements.txt \
+    && python -m pip check \
+    && python -m pip uninstall --yes pip
 
-RUN groupadd --system app \
-    && useradd --system --gid app --home-dir /app app
+RUN addgroup --system app \
+    && adduser --system --ingroup app --home /app app
 
 COPY --chown=app:app . .
 

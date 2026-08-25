@@ -6,7 +6,7 @@ on:
       python_version:
         description: 테스트에 사용할 Python 버전
         required: false
-        default: "3.12.10"
+        default: "3.12.14"
         type: string
       smoke_test_path:
         description: 컨테이너가 시작됐는지 한 번 확인할 기존 Django HTTP 경로
@@ -60,19 +60,19 @@ jobs:
     - name: Trivy 파일시스템 취약점 차단 검사 (Critical, High)
       uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
       with:
-        version: v0.72.0
+        version: v0.74.0
         scan-type: fs
         scan-ref: .
         scanners: vuln
         severity: CRITICAL,HIGH
-        ignore-unfixed: true
+        ignore-unfixed: false
         exit-code: "1"
 
     - name: Trivy 파일시스템 SARIF 생성 (수정본 없는 취약점 포함)
       if: always()
       uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
       with:
-        version: v0.72.0
+        version: v0.74.0
         scan-type: fs
         scan-ref: .
         scanners: vuln
@@ -320,18 +320,18 @@ jobs:
     - name: Trivy 이미지 취약점/시크릿 차단 검사 (Critical, High)
       uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
       with:
-        version: v0.72.0
+        version: v0.74.0
         image-ref: ctf-backend:test
         scanners: vuln,secret
         severity: CRITICAL,HIGH
-        ignore-unfixed: true
+        ignore-unfixed: false
         exit-code: "1"
 
     - name: Trivy 이미지 SARIF 생성 (수정본 없는 취약점 포함)
       if: always()
       uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
       with:
-        version: v0.72.0
+        version: v0.74.0
         image-ref: ctf-backend:test
         scanners: vuln,secret
         severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL

@@ -36,8 +36,9 @@ MSG-CTF/msg-backend
 - `v1.0.0`, `v2.0.0`, `v3.0.0`은 이미 공개한 버전이므로 이동하거나 덮어쓰지 않는다.
 - `/healthz` 계약을 제거한 버전은 `v3.0.0`이다.
 - 호환성을 깨지 않고 Semgrep SAST 검사를 추가한 버전은 `v3.1.0`이다.
+- 알려진 Django 취약점과 컨테이너 기반 이미지 취약점을 제거하고, 수정본 없는 HIGH·CRITICAL도 차단하도록 강화한 버전은 `v3.2.0`이다.
 - 새 버전은 로컬 검사와 GitHub Actions가 모두 통과한 commit에만 태그를 붙인다.
-- 백엔드는 `@main` 대신 검증된 `@v3.1.0`을 호출한다.
+- 백엔드는 `@main` 대신 검증된 `@v3.2.0`을 호출한다.
 
 ## 1단계: 중앙 CI에서 하는 검사
 
@@ -47,8 +48,8 @@ MSG-CTF/msg-backend
 
 1. Gitleaks가 Git 기록까지 확인한다.
 2. Trivy가 HIGH·CRITICAL 취약점을 검사한다.
-3. 수정 버전이 있는 HIGH·CRITICAL 취약점은 CI를 실패시킨다.
-4. 수정 버전이 아직 없는 취약점도 SARIF 보고서에는 남긴다.
+3. 수정 버전 유무와 관계없이 HIGH·CRITICAL 취약점은 CI를 실패시킨다.
+4. LOW·MEDIUM을 포함한 전체 결과도 SARIF 보고서에 남긴다.
 
 ### Semgrep SAST 검사
 
@@ -62,7 +63,7 @@ MSG-CTF/msg-backend
 
 CTF 페이지 자체에는 의도적인 취약 코드를 두지 않으므로 `ERROR`를 처음부터 병합 차단 대상으로 사용한다. 테스트 값이나 도구 오탐은 실제 Secret인지 먼저 확인하고, 안전하다는 근거가 있을 때만 해당 줄의 `nosemgrep` 또는 아주 좁은 `.semgrepignore` 규칙으로 제외한다. 앱 폴더 전체를 제외하지 않는다.
 
-2026-08-24에 백엔드 `main` commit `42b46886d72f6146bd1b30f5d6c69fe62eaa27ef`을 미리 검사한 결과는 전체 10건, 그중 차단 대상 `ERROR` 3건이었다.
+2026-08-25에 백엔드 `main` commit `8483264685cf0ebfe4836f1b4444f0bb66b0d0e6`을 미리 검사한 결과는 전체 11건, 그중 차단 대상 `ERROR` 3건이었다.
 
 - `apps/accounts/tests.py` 1건은 오래된 공개 키로 만든 위조 토큰이 거절되는지 확인하는 보안 회귀 테스트다. 실제 Secret이 아니라는 검토 근거를 남기고 그 한 줄만 규칙 ID가 포함된 `nosemgrep`으로 제외할 수 있다.
 - `koth-template` 아래 Dockerfile 2개는 비루트 `USER`가 없다는 발견이다. 템플릿으로 만들어지는 컨테이너도 실제 실행될 수 있으므로 사용자를 추가하는 것이 우선이다.
@@ -90,6 +91,8 @@ CTF 페이지 자체에는 의도적인 취약 코드를 두지 않으므로 `ER
 5. `Host: example.com`과 HTTPS 프록시 헤더를 넣어 기존 `/admin/login/`을 한 번 요청한다.
 6. 응답이 성공하지 않으면 시작 실패로 판단하고 컨테이너 로그를 보여준다.
 7. Trivy로 만들어진 이미지도 검사한다.
+
+예제 Dockerfile은 digest로 고정한 Python 3.12 Alpine 이미지를 사용하고 OS 패키지를 빌드 시점에 갱신한다. `pip`는 안전한 고정 버전으로 의존성을 설치하고 충돌을 확인한 뒤, 실행 중에는 필요하지 않으므로 최종 이미지에서 제거한다. 2026-08-25 감사에서 기존 Debian slim 이미지는 애플리케이션 의존성이 깨끗해도 OS 계층에 수정본 없는 HIGH·CRITICAL이 남았기 때문에 교체했다.
 
 Docker의 `HEALTHCHECK` 유무는 검사하지 않는다. 계속되는 상태 판단은 별도 SLA 모니터링의 책임이기 때문이다.
 
@@ -119,17 +122,15 @@ docs/backend-workflow-example.yml   → msg-backend/.github/workflows/ci-cd.yml
 
 `config/health.py`, `/healthz` URL, 전용 테스트는 추가하지 않는다.
 
-백엔드 `requirements.txt`에는 Gunicorn 고정 버전을 추가한다.
+백엔드 `requirements.txt`에는 Gunicorn 고정 버전을 추가하고, 2026-08-25 SCA에서 확인한 Django와 sqlparse 취약 버전을 올린다.
 
 ```text
 gunicorn==26.1.0
-```
-
-현재 `sqlparse==0.5.5`에서 수정 가능한 HIGH 취약점이 확인됐으므로 다음처럼 올린다.
-
-```text
+Django==5.2.17
 sqlparse==0.6.0
 ```
+
+현재 백엔드 `main`의 `Django==5.2.16`과 `sqlparse==0.5.5`에서는 pip-audit 기준 공개 취약점 5건이 확인됐다. 위 버전은 그 취약점들의 수정 버전이다.
 
 ### 백엔드 settings.py 수정
 
@@ -166,7 +167,7 @@ SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 ```yaml
 jobs:
   ci:
-    uses: MSG-CTF/jm_devsecops/.github/workflows/reusable-ci.yml@v3.1.0
+    uses: MSG-CTF/jm_devsecops/.github/workflows/reusable-ci.yml@v3.2.0
     with:
       smoke_test_path: /admin/login/
 ```
@@ -188,7 +189,7 @@ jobs:
 - 각 Secret의 `latest`가 아닌 숫자 버전을 정함
 - 운영 migration을 Cloud Run Job 등으로 먼저 적용하는 절차가 준비됨
 - GitHub `production` Environment에 승인 규칙을 설정함
-- Workload Identity 조건이 `MSG-CTF/msg-backend`, `main` ref와 중앙 `reusable-cd.yml@v3.1.0` 호출만 허용함
+- Workload Identity 조건이 `MSG-CTF/msg-backend`, `main` ref와 중앙 `reusable-cd.yml@v3.2.0` 호출만 허용함
 - Cloud Run URL 또는 운영 도메인을 `DJANGO_ALLOWED_HOSTS`에 넣음
 - 별도 SLA 모니터링의 대상 주소, 주기, 알림 받을 사람을 정함
 
@@ -200,7 +201,7 @@ jobs:
   deploy:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: ci
-    uses: MSG-CTF/jm_devsecops/.github/workflows/reusable-cd.yml@v3.1.0
+    uses: MSG-CTF/jm_devsecops/.github/workflows/reusable-cd.yml@v3.2.0
     with:
       commit_sha: ${{ github.sha }}
       dockerhub_username: ${{ vars.DOCKERHUB_USERNAME }}
@@ -247,7 +248,7 @@ CD는 다음 순서로 동작한다.
 1. 중앙 저장소에서 `actionlint`, Django 테스트, Docker 실행 검사를 통과시킨다.
 2. 중앙 변경을 `main`에 push한다.
 3. GitHub Actions 결과가 모두 통과한 것을 확인한다.
-4. 그 통과한 commit에만 `v3.1.0` 태그를 만든다.
+4. 그 통과한 commit에만 아직 사용하지 않은 새 버전 태그를 만든다. 이 변경은 `v3.2.0`이다.
 5. 백엔드 최신 `main`에서 만든 `chore/devsecops-v3` 브랜치에 백엔드용 파일을 추가한다.
 6. 백엔드 CI가 실제로 모든 검사를 실행하고 통과하는지 확인한다.
 7. 새 백엔드 PR을 만든다.
@@ -267,6 +268,21 @@ docker-build-check
 ```
 
 이 설정이 없으면 CI가 실패해도 merge할 수 있으므로 진짜 병합 게이트가 아니다.
+
+## v3.2.0 보안 감사 기록
+
+2026-08-25에 중앙 저장소 `main` 후보를 다음 범위로 다시 검사했다.
+
+- pip-audit SCA: 알려진 Python 의존성 취약점 0건
+- Trivy 0.74.0: 저장소와 최종 컨테이너를 UNKNOWN부터 CRITICAL까지 검사한 결과 취약점 0건, 시크릿 0건
+- Semgrep Community SAST: 343개 규칙, 발견 0건, 실행 오류 0건
+- Bandit Python SAST: 116줄, 발견 0건, 실행 오류 0건
+- Gitleaks: Git 기록 18개 commit, 노출된 시크릿 0건
+- Django: 테스트 1개 통과, `check --deploy --fail-level WARNING` 경고 0건
+- Docker: 빌드와 HTTP 시작 확인 통과, UID 100 비루트 실행, Gunicorn이 PID 1로 실행됨
+- actionlint와 Git diff 형식 검사 통과
+
+감사 중 Django 5.2.16의 공개 취약점과 기존 Debian slim 이미지의 OS 취약점을 실제로 발견해 수정했다. 이 결과는 **검사 시점의 공개 취약점 DB와 적용한 규칙 범위에서 발견된 문제가 0건**이라는 뜻이다. 아직 공개되지 않은 제로데이, 실제 운영 GCP 설정, 백엔드의 전체 업무 코드, 인증된 사용자 흐름을 공격하는 DAST와 수동 침투 테스트까지 안전하다고 보증하는 문장은 아니다.
 
 ## 실패했을 때 확인할 곳
 
