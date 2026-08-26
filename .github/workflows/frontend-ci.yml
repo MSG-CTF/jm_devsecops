@@ -11,8 +11,70 @@ on:
         type: string
         default: "."
 
+permissions:
+  contents: read
+
+# 같은 브랜치에 연달아 push하면 이전 실행은 취소한다 - 어차피 결과가 무의미하다
+concurrency:
+  group: frontend-ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  security-scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: gitleaks-secret-scan
+        # dir이 아닌 git 모드 - 커밋 히스토리까지 스캔해야 지웠다 되살릴 수 있는 시크릿을 잡는다
+        # (위 fetch-depth: 0이 전체 히스토리를 받아오는 이유)
+        run: |
+          docker run --rm \
+            -v "$PWD:/repo" \
+            ghcr.io/gitleaks/gitleaks:v8.30.1 \
+            git /repo --redact --verbose
+
+      - name: trivy-fs-scan-block-critical-high
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          version: v0.72.0
+          scan-type: fs
+          scan-ref: ${{ inputs.working-directory }}
+          scanners: vuln
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: trivy-fs-generate-sarif
+        if: always()
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          version: v0.72.0
+          scan-type: fs
+          scan-ref: ${{ inputs.working-directory }}
+          scanners: vuln
+          ignore-unfixed: true
+          format: sarif
+          output: trivy-frontend-fs-results.sarif
+          exit-code: "0"
+
+      - name: trivy-fs-upload-sarif
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-frontend-fs-results.sarif
+          category: trivy-frontend-filesystem
+
   build:
+    needs: security-scan
     runs-on: ubuntu-latest
     defaults:
       run:
