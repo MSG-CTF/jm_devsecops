@@ -1,0 +1,45 @@
+name: frontend-ci-reusable
+
+# workflow_call만 트리거로 둔다 — 이 워크플로우는 이 저장소에서 직접 push/PR로
+# 도는 게 아니라, 다른 저장소(front-team)가 "불러줄 때만" 실행된다.
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: "package.json이 있는 경로 (프론트 저장소 루트 기준)"
+        required: false
+        type: string
+        default: "."
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: setup-node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: ${{ inputs.working-directory }}/package-lock.json
+
+      - name: install-dependencies
+        # lockfile 기준으로 정확히 고정된 버전만 설치
+        run: npm ci
+
+      - name: build
+        run: npm run build
+
+      # TODO: lint — 프론트 팀 ESLint 도입 여부 확정 후 스텝 추가
+      # TODO: test — 프론트 팀 테스트 프레임워크 도입 여부 확정 후 스텝 추가
+      # TODO: deploy/publish artifact — 배포 대상(정적 호스팅/K3s/CDN)과
+      #       동일 오리진 여부(현재 "같은 도메인, 경로 분리" 전제로 답변 받음,
+      #       최종 확정 시) 확정 후 스텝 추가
+      # TODO: front-team 저장소에 이 워크플로우를 호출하는 caller workflow가
+      #       아직 없음. front-team/.github/workflows/ci.yml 생성 필요.
+      #       그 전까지는 이 워크플로우가 존재해도 실행되지 않는다(호출자 없음).
