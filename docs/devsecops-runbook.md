@@ -47,7 +47,7 @@ MSG-CTF/msg-backend
 
 ### 보안 검사
 
-1. Gitleaks가 Git 기록까지 확인한다.
+1. Gitleaks가 일반 commit과 병합 commit의 각 부모 diff를 포함한 Git 기록을 확인한다.
 2. Trivy가 HIGH·CRITICAL 취약점을 검사한다.
 3. 수정 버전 유무와 관계없이 HIGH·CRITICAL 취약점은 CI를 실패시킨다.
 4. LOW·MEDIUM을 포함한 전체 결과도 SARIF 보고서에 남긴다.
@@ -312,7 +312,7 @@ docker-build-check
 
 ## 실패했을 때 확인할 곳
 
-- Gitleaks 실패: 노출된 자격증명을 즉시 폐기하고 Git 기록에서도 제거한다.
+- Gitleaks 실패: 노출된 자격증명을 즉시 폐기하고 Git 기록에서도 제거한다. Gitleaks가 통과해도 과거 `.env` 같은 파일에 실제 Secret이 있었음을 알게 됐다면 검사 결과와 관계없이 해당 키를 교체한다.
 - Semgrep 실패: 표시된 파일과 줄의 코드를 확인한다. 진짜 문제면 수정하고, 오탐이면 안전한 근거를 PR에 적은 뒤 가장 좁은 범위로 제외한다.
 - Trivy 실패: `requirements.txt` 또는 베이스 이미지 digest를 안전한 버전으로 갱신한다.
 - migration 실패: 모델 변경에 해당하는 migration이 커밋됐는지 확인한다.
