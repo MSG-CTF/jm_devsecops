@@ -38,8 +38,9 @@ MSG-CTF/msg-backend
 - 호환성을 깨지 않고 Semgrep SAST 검사를 추가한 버전은 `v3.1.0`이다.
 - 알려진 Django 취약점과 컨테이너 기반 이미지 취약점을 제거하고, 수정본 없는 HIGH·CRITICAL도 차단하도록 강화한 버전은 `v3.2.0`이다.
 - Python 전용 Bandit SAST를 추가한 버전은 `v3.3.0`이다.
+- 병합 commit의 각 부모 diff까지 Gitleaks 검사 범위에 포함한 패치 버전은 `v3.3.1`이다.
 - 새 버전은 로컬 검사와 GitHub Actions가 모두 통과한 commit에만 태그를 붙인다.
-- 백엔드는 `@main` 대신 검증된 `@v3.3.0`을 호출한다.
+- 백엔드는 `@main` 대신 검증된 `@v3.3.1`을 호출한다.
 
 ## 1단계: 중앙 CI에서 하는 검사
 
@@ -193,7 +194,7 @@ SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 ```yaml
 jobs:
   ci:
-    uses: MSG-CTF/jm_devsecops/.github/workflows/reusable-ci.yml@v3.3.0
+    uses: MSG-CTF/jm_devsecops/.github/workflows/reusable-ci.yml@v3.3.1
     with:
       smoke_test_path: /admin/login/
 ```
@@ -215,7 +216,7 @@ jobs:
 - 각 Secret의 `latest`가 아닌 숫자 버전을 정함
 - 운영 migration을 Cloud Run Job 등으로 먼저 적용하는 절차가 준비됨
 - GitHub `production` Environment에 승인 규칙을 설정함
-- Workload Identity 조건이 `MSG-CTF/msg-backend`, `main` ref와 중앙 `reusable-cd.yml@v3.3.0` 호출만 허용함
+- Workload Identity 조건이 `MSG-CTF/msg-backend`, `main` ref와 중앙 `reusable-cd.yml@v3.3.1` 호출만 허용함
 - Cloud Run URL 또는 운영 도메인을 `DJANGO_ALLOWED_HOSTS`에 넣음
 - 별도 SLA 모니터링의 대상 주소, 주기, 알림 받을 사람을 정함
 
@@ -227,7 +228,7 @@ jobs:
   deploy:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: ci
-    uses: MSG-CTF/jm_devsecops/.github/workflows/reusable-cd.yml@v3.3.0
+    uses: MSG-CTF/jm_devsecops/.github/workflows/reusable-cd.yml@v3.3.1
     with:
       commit_sha: ${{ github.sha }}
       dockerhub_username: ${{ vars.DOCKERHUB_USERNAME }}
@@ -274,7 +275,7 @@ CD는 다음 순서로 동작한다.
 1. 중앙 저장소에서 `actionlint`, Django 테스트, Docker 실행 검사를 통과시킨다.
 2. 중앙 변경을 `main`에 push한다.
 3. GitHub Actions 결과가 모두 통과한 것을 확인한다.
-4. 그 통과한 commit에만 아직 사용하지 않은 새 버전 태그를 만든다. Bandit 추가 변경은 `v3.3.0`이다.
+4. 그 통과한 commit에만 아직 사용하지 않은 새 버전 태그를 만든다. 병합 commit 시크릿 검사 보완은 `v3.3.1`이다.
 5. 백엔드 최신 `main`에서 만든 `chore/devsecops-v3` 브랜치에 백엔드용 파일을 추가한다.
 6. 백엔드 CI가 실제로 모든 검사를 실행하고 통과하는지 확인한다.
 7. 새 백엔드 PR을 만든다.

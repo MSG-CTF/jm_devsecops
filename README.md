@@ -3,11 +3,11 @@
 ## 30초 요약
 
 - 이 저장소는 `MSG-CTF/msg-backend`가 공통으로 사용할 **CI/CD 검사 설명서**를 보관한다.
-- 현재 백엔드가 사용해야 하는 안정 버전은 **`v3.3.0`**이다.
+- 현재 백엔드가 사용해야 하는 안정 버전은 **`v3.3.1`**이다.
 - CI는 코드가 들어올 때마다 보안, Python/Django, PostgreSQL, Redis, Docker를 자동 검사한다.
 - SAST는 Semgrep과 Bandit을 함께 사용한다. SCA와 컨테이너 취약점 검사는 Trivy가 담당하고, 유출된 비밀값은 Gitleaks가 찾는다.
 - CD 코드는 준비되어 있지만 아직 백엔드에서 호출하지 않는다. Cloud SQL, Redis, Secret Manager, 운영 migration 절차와 승인 규칙을 준비한 뒤 켜야 한다.
-- 백엔드는 움직이는 `@main`이 아니라 고정된 `@v3.3.0`을 호출해야 한다.
+- 백엔드는 움직이는 `@main`이 아니라 고정된 `@v3.3.1`을 호출해야 한다.
 - 별도의 `/healthz` API는 요구하지 않는다. CI와 CD는 기존 `/admin/login/`을 한 번 요청해서 시작 여부만 확인한다.
 
 ```text
@@ -286,12 +286,12 @@ concurrency:
 
 jobs:
   ci:
-    uses: MSG-CTF/jm_devsecops/.github/workflows/reusable-ci.yml@v3.3.0
+    uses: MSG-CTF/jm_devsecops/.github/workflows/reusable-ci.yml@v3.3.1
     with:
       smoke_test_path: /admin/login/
 ```
 
-`@main`은 중앙 코드가 바뀌는 즉시 백엔드 결과도 바뀐다. `@v3.3.0`은 같은 버전이 항상 같은 코드를 가리키므로 재현과 문제 추적이 쉽다.
+`@main`은 중앙 코드가 바뀌는 즉시 백엔드 결과도 바뀐다. `@v3.3.1`은 같은 버전이 항상 같은 코드를 가리키므로 재현과 문제 추적이 쉽다.
 
 처음에는 Black을 경고로만 확인한다. 백엔드 포맷을 정리한 뒤 다음 값을 추가하면 Black 오류도 병합을 막는다.
 
@@ -318,7 +318,7 @@ ci / docker-build-check
 
 ## 버전 관리 규칙
 
-현재 권장 안정 버전은 **`v3.3.0`**이다.
+현재 권장 안정 버전은 **`v3.3.1`**이다.
 
 | 버전 | 핵심 변경 |
 |---|---|
@@ -328,6 +328,7 @@ ci / docker-build-check
 | `v3.1.0` | Semgrep SAST 추가 |
 | `v3.2.0` | Django·컨테이너 보안 강화, 수정본 없는 HIGH·CRITICAL도 차단 |
 | `v3.3.0` | Bandit Python SAST 추가 |
+| `v3.3.1` | 병합 commit의 각 부모 diff까지 Gitleaks 검사 범위에 포함하고 백엔드 호출 문서 보완 |
 
 이미 공개한 태그는 이동하거나 덮어쓰지 않는다. 같은 버전이 다른 코드를 가리키면 어느 검사를 실행했는지 믿을 수 없기 때문이다.
 
