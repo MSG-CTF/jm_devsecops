@@ -188,7 +188,7 @@ SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 ## 3단계: 처음에는 CI만 연결
 
-`docs/backend-workflow-example.yml`은 모든 브랜치 push와 `main`·`develop` 대상 PR에서 CI를 실행한다. 이 단계에는 Docker Hub나 GCP Secret이 필요 없다.
+`docs/backend-workflow-example.yml`은 `main` push와 `main` 대상 PR에서 CI를 실행하고 수동 실행도 허용한다. 기능 브랜치에 열린 PR이 있을 때 동일한 commit에서 `push`와 `pull_request` 검사가 자동으로 두 번 도는 것을 막기 위해 `push`는 `main`으로 제한한다. 현재 백엔드에는 `dev` 또는 `develop` 브랜치가 없으며, 팀이 실제 통합 브랜치를 만든 뒤에만 그 정확한 이름을 두 이벤트에 추가한다. 이 단계에는 Docker Hub나 GCP Secret이 필요 없다.
 
 ```yaml
 jobs:
@@ -284,13 +284,13 @@ CD는 다음 순서로 동작한다.
 
 ## Branch protection
 
-백엔드 `main`의 Branch protection 또는 Ruleset에서 첫 CI 실행 후 표시되는 다음 세 작업을 필수 검사로 지정한다.
+백엔드 `main`의 Branch protection 또는 Ruleset에서 첫 CI 실행 후 표시되는 다음 네 작업을 필수 검사로 지정한다. 재사용 워크플로를 부르는 job ID가 `ci`이므로 실제 검사 이름 앞에 `ci /`가 붙는다.
 
 ```text
-security-scan
-sast-scan
-lint-and-test
-docker-build-check
+ci / security-scan
+ci / sast-scan
+ci / lint-and-test
+ci / docker-build-check
 ```
 
 이 설정이 없으면 CI가 실패해도 merge할 수 있으므로 진짜 병합 게이트가 아니다.

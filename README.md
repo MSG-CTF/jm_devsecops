@@ -271,8 +271,10 @@ name: Backend CI
 
 on:
   push:
+    branches: ["main"]
   pull_request:
-    branches: ["main", "develop"]
+    branches: ["main"]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -304,13 +306,15 @@ jobs:
 백엔드 `main`의 Ruleset 또는 Branch protection에서 다음 네 작업을 필수 검사로 지정한다.
 
 ```text
-security-scan
-sast-scan
-lint-and-test
-docker-build-check
+ci / security-scan
+ci / sast-scan
+ci / lint-and-test
+ci / docker-build-check
 ```
 
 이 설정이 없으면 CI가 빨간불이어도 사람이 merge할 수 있다. 파이프라인이 진짜 문지기가 되려면 GitHub 설정에서도 이 네 결과를 요구해야 한다.
+
+백엔드에는 현재 `dev` 또는 `develop` 브랜치가 없으므로 예제는 `main`만 지정한다. 기능 브랜치에 push하면서 열린 PR을 갱신하면 `pull_request` 검사만 자동 실행되어 같은 commit의 `push` 검사와 중복되지 않는다. `workflow_dispatch`는 PR 전 수동 검사가 필요할 때 사용한다. 팀이 실제 통합 브랜치를 만든 뒤에는 그 정확한 브랜치 이름을 `push`와 `pull_request` 양쪽에 추가한다.
 
 ## 버전 관리 규칙
 
