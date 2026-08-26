@@ -41,6 +41,63 @@ jobs:
             ghcr.io/gitleaks/gitleaks:v8.30.1 \
             git /repo --redact --verbose
 
+      # 백엔드 reusable-ci.yml의 Semgrep 스텝과 동일한 도구 버전·판정 로직을 사용.
+      # --config만 JS/React 스택에 맞춰 p/javascript, p/react로 지정.
+      - name: semgrep-sast-scan
+        id: semgrep
+        run: |
+          docker run --rm \
+            --volume "${GITHUB_WORKSPACE}:/src:ro" \
+            --workdir /src \
+            semgrep/semgrep:1.173.0-nonroot@sha256:ae85c429145ef6b29c7a47b4cdec78304f9b325f75ce0ee4a797e841206e3e68 \
+            semgrep scan \
+            --config p/javascript \
+            --config p/react \
+            --oss-only \
+            --metrics=off \
+            --disable-version-check \
+            --sarif . > semgrep-frontend-results.sarif
+
+          error_findings="$(
+            jq '[
+              .runs[] as $run
+              | $run.results[]?
+              | .ruleId as $rule_id
+              | $run.tool.driver.rules[]?
+              | select(
+                  .id == $rule_id
+                  and .defaultConfiguration.level == "error"
+                )
+            ] | length' semgrep-frontend-results.sarif
+          )"
+
+          if [ "$error_findings" -gt 0 ]; then
+            echo "Semgrep ERROR 심각도 발견 ${error_findings}건으로 CI를 실패시킵니다."
+            jq -r '
+              .runs[] as $run
+              | $run.results[]?
+              | . as $result
+              | .ruleId as $rule_id
+              | $run.tool.driver.rules[]?
+              | select(
+                  .id == $rule_id
+                  and .defaultConfiguration.level == "error"
+                )
+              | "- \($rule_id): \($result.locations[0].physicalLocation.artifactLocation.uri):\($result.locations[0].physicalLocation.region.startLine)"
+            ' semgrep-frontend-results.sarif
+            exit 1
+          fi
+
+          echo "Semgrep ERROR 심각도 발견이 없습니다."
+
+      - name: semgrep-upload-sarif
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: semgrep-frontend-results.sarif
+          category: semgrep-frontend-sast
+
       - name: trivy-fs-scan-block-critical-high
         uses: aquasecurity/trivy-action@v0.36.0
         with:
