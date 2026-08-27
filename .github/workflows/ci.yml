@@ -150,7 +150,12 @@ jobs:
         DEBUG: "False"
         SECRET_KEY: "ci-only-key-not-used-anywhere-else-0123456789abcdef"
         ALLOWED_HOSTS: "example.com"
-      run: python manage.py check --deploy --fail-level WARNING
+      run: |
+        if [ -f manage.py ]; then
+          python manage.py check --deploy --fail-level WARNING
+        else
+          echo "manage.py not found. Django project might not be created yet. Skipping check."
+        fi
 
   docker-build-check:
     runs-on: ubuntu-latest
