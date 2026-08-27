@@ -119,8 +119,7 @@ jobs:
         # Django 프로젝트 코드가 존재할 경우 Lint 검사 실행
         if [ -d "app" ] || ls ./*.py 1> /dev/null 2>&1; then
           echo "Running Lint checks..."
-          black --check . || true
-          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+          black --check . && flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
         else
           echo "No python files found to lint. Skipping."
         fi
