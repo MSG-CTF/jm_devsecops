@@ -137,7 +137,7 @@ jobs:
       run: |
         # manage.py가 존재하는 경우에만 Django 테스트 실행
         if [ -f manage.py ]; then
-          python manage.py test
+          python manage.py test || exit 1
         else
           echo "manage.py not found. Django project might not be created yet. Skipping tests."
         fi
