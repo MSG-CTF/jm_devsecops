@@ -6,7 +6,7 @@
 - 현재 백엔드가 사용해야 하는 안정 버전은 **`v3.3.1`**이다.
 - CI는 코드가 들어올 때마다 보안, Python/Django, PostgreSQL, Redis, Docker를 자동 검사한다.
 - SAST는 Semgrep과 Bandit을 함께 사용한다. SCA와 컨테이너 취약점 검사는 Trivy가 담당하고, 유출된 비밀값은 Gitleaks가 찾는다.
-- CD 코드는 준비되어 있지만 아직 백엔드에서 호출하지 않는다. Cloud SQL, Redis, Secret Manager, 운영 migration 절차와 승인 규칙을 준비한 뒤 켜야 한다.
+- 안정적으로 사용 중인 범위는 CI `v3.3.1`까지다. Artifact Registry와 개발 Cloud Run용 CD는 `v3.4.0` 후보이며 실제 GCP 시험 전에는 태그를 발행하거나 백엔드에서 켜지 않는다.
 - 백엔드는 움직이는 `@main`이 아니라 고정된 `@v3.3.1`을 호출해야 한다.
 - 별도의 `/healthz` API는 요구하지 않는다. CI와 CD는 기존 `/admin/login/`을 한 번 요청해서 시작 여부만 확인한다.
 
@@ -27,10 +27,10 @@
 운영 준비가 끝난 뒤 main push
                 │
                 ▼
-        중앙 reusable-cd 호출
+     중앙 build/deploy workflow 호출
                 │
                 ▼
- 빌드 → 보안 검사 → Docker Hub → 승인 → Cloud Run
+ 보안 검사 → Artifact Registry → migration Job → 개발 Cloud Run → smoke·ZAP/rollback
 ```
 
 ## CI와 CD가 무엇인가
@@ -47,7 +47,7 @@ CI는 선생님이 숙제를 제출받자마자 틀린 곳이 없는지 검사�
 CD는 검사를 통과한 결과물을 실제 운영 서버까지 안전하게 배달하는 과정이다.
 
 - 검사한 코드로 Docker 이미지를 만든다.
-- 취약점 검사를 통과한 이미지만 Docker Hub에 올린다.
+- 취약점 검사를 통과한 이미지만 Artifact Registry에 올린다.
 - 사람이 운영 배포를 승인한다.
 - 비밀번호를 코드에 넣지 않고 GCP Secret Manager에서 가져온다.
 - 정확히 검사한 이미지의 digest를 Cloud Run에 배포한다.
@@ -59,15 +59,19 @@ CI와 CD는 연결되지만 역할이 다르다. CI가 실패하면 CD를 시작
 ```text
 .github/workflows/
 ├── ci.yml                 중앙 저장소 자체 CI를 시작하는 파일
-├── reusable-ci.yml        백엔드가 호출하는 실제 공통 CI
-└── reusable-cd.yml        나중에 백엔드가 호출할 실제 공통 CD
+├── reusable-ci.yml                  백엔드가 호출하는 안정 공통 CI
+├── reusable-backend-build.yml       v3.4.0 후보: 이미지 검사·Artifact Registry 게시
+├── reusable-backend-deploy-dev.yml  v3.4.0 후보: migration·개발 Cloud Run·rollback
+└── reusable-cd.yml                  이전 Docker Hub 방식의 호환용 legacy CD
 
 docs/
 ├── backend-workflow-example.yml   백엔드용 짧은 호출 파일 예제
 ├── backend-files/
 │   ├── Dockerfile                 백엔드용 Dockerfile 예제
 │   └── .dockerignore              백엔드용 Docker 제외 목록 예제
-└── devsecops-runbook.md           설정과 운영 작업 순서
+├── backend-cd-workflow-example.yml  백엔드 CI와 개발 CD 호출 예제
+├── backend-cd-github-setup.md       GitHub CD 변수와 안전한 연결 순서
+└── devsecops-runbook.md             설정과 운영 작업 순서
 
 Dockerfile / manage.py / config/ / requirements.txt
 └── 중앙 reusable CI가 고장 나지 않았는지 확인하는 작은 Django 시험 프로젝트
@@ -221,7 +225,19 @@ SLA 모니터링은 배포가 끝난 뒤에도 서비스가 계속 정상인지 
 
 ## 현재 CD 상태
 
-`reusable-cd.yml`에는 실제 CD 코드가 있지만, 현재 중앙 저장소와 백엔드는 이를 자동 호출하지 않는다. 즉, **CD 설계는 준비되어 있지만 운영 배포 스위치는 꺼져 있다.**
+안정 버전 `v3.3.1`의 `reusable-cd.yml`은 Docker Hub에서 Cloud Run으로 바로 배포하는 초기 골격이다. migration과 현재 개발 GCP 구조를 반영하지 못하므로 새 백엔드 연결에는 사용하지 않는다.
+
+새 `v3.4.0` 후보는 아래처럼 역할을 나눴다.
+
+```text
+reusable-backend-build.yml
+정확한 commit → Gitleaks → Docker build → Trivy → Artifact Registry → digest 출력
+
+reusable-backend-deploy-dev.yml
+GCP 전제조건 → 같은 digest로 migration Job → 개발 Cloud Run → smoke·ZAP → 필요 시 rollback
+```
+
+GitHub 파일의 정적 준비와 실제 배포 완료는 다르다. Cloud SQL, Redis, VPC, Secret Manager, Artifact Registry와 서비스 계정을 만든 뒤 실제 개발 GCP에서 수동 배포·실패·rollback까지 확인해야 `v3.4.0`을 공개할 수 있다.
 
 CD를 켜기 전에 다음 준비가 필요하다.
 
@@ -230,13 +246,14 @@ CD를 켜기 전에 다음 준비가 필요하다.
 - Cloud Run이 접근할 수 있는 Redis
 - GCP Secret Manager의 Django, JWT, PostgreSQL Secret
 - Secret의 `latest`가 아닌 숫자 버전
-- 운영 migration을 먼저 실행할 Cloud Run Job 같은 절차
-- GitHub `production` Environment의 승인 규칙
+- migration을 먼저 실행할 별도 Cloud Run Job과 runtime 서비스 계정
+- 이미지 게시 계정과 Cloud Run 배포 계정을 분리한 최소 권한 IAM
+- GitHub `development` Environment의 승인 규칙
 - 저장소와 `main`만 허용하는 Workload Identity 조건
 - 운영 도메인과 `DJANGO_ALLOWED_HOSTS`
 - 배포 뒤 계속 상태를 확인할 SLA 모니터링
 
-### CD가 켜졌을 때의 순서
+### 새 개발 CD가 켜졌을 때의 순서
 
 #### `build-scan-push`
 
@@ -246,21 +263,24 @@ CD를 켜기 전에 다음 준비가 필요하다.
 4. Gitleaks로 Git 기록을 다시 검사한다.
 5. Docker 이미지를 commit SHA 태그로 빌드한다.
 6. Trivy로 이미지 취약점과 Secret을 검사한다.
-7. 통과한 이미지만 Docker Hub에 push한다.
+7. 통과한 이미지만 Artifact Registry에 push한다.
 8. push된 이미지의 digest를 구한다.
 
 commit SHA는 코드의 주민등록번호와 비슷하고, 이미지 digest는 완성된 상자의 지문과 비슷하다. 이름표인 Docker 태그는 움직일 수 있지만 digest가 같으면 내용도 같다.
 
 #### `deploy`
 
-1. GitHub `production` Environment의 승인 규칙을 거친다.
+1. GitHub `development` Environment의 승인 규칙을 거친다.
 2. 저장된 장기 GCP 키 대신 Workload Identity Federation으로 인증한다.
-3. Docker 태그가 아니라 검사한 digest로 Cloud Run에 배포한다.
+3. Docker 태그가 아니라 검사한 digest로 migration Job을 먼저 실행한다.
 4. 일반 설정값은 환경변수로 전달한다.
 5. Django 키, JWT 키, DB 비밀번호는 Secret Manager의 고정 숫자 버전에서 가져온다.
-6. Cloud Run URL의 `/admin/login/`을 한 번 요청한다.
+6. migration 성공 후 같은 digest를 개발 Cloud Run에 배포한다.
+7. Cloud Run URL의 `/admin/login/`을 한 번 요청한다.
+8. OWASP ZAP passive baseline으로 실행 중인 개발 서비스를 검사하고 보고서를 남긴다.
+9. smoke 또는 High 이상 DAST 발견 시 가능한 경우 직전 정상 revision으로 traffic을 되돌리고 workflow는 실패시킨다.
 
-주의: 현재 `reusable-cd.yml`은 운영 migration을 직접 실행하지 않는다. migration Job과 검증 절차가 준비되기 전에는 백엔드 deploy job을 켜면 안 된다.
+백엔드 연결 값과 단계별 절차는 [`docs/backend-cd-github-setup.md`](docs/backend-cd-github-setup.md), 완성된 호출 예제는 [`docs/backend-cd-workflow-example.yml`](docs/backend-cd-workflow-example.yml)을 따른다. 기존 `reusable-cd.yml`은 호환 확인 전까지 남겨 둔 legacy 파일이며 새 연결에는 사용하지 않는다.
 
 ## 백엔드가 CI를 연결하는 방법
 
@@ -329,6 +349,8 @@ ci / docker-build-check
 | `v3.2.0` | Django·컨테이너 보안 강화, 수정본 없는 HIGH·CRITICAL도 차단 |
 | `v3.3.0` | Bandit Python SAST 추가 |
 | `v3.3.1` | 병합 commit의 각 부모 diff까지 Gitleaks 검사 범위에 포함하고 백엔드 호출 문서 보완 |
+
+`v3.4.0`은 Artifact Registry build, migration Job, 개발 Cloud Run 배포와 smoke rollback을 추가하는 **후보 버전**이다. 실제 GCP 수동 배포 검증 전에는 공개 버전이 아니다.
 
 이미 공개한 태그는 이동하거나 덮어쓰지 않는다. 같은 버전이 다른 코드를 가리키면 어느 검사를 실행했는지 믿을 수 없기 때문이다.
 

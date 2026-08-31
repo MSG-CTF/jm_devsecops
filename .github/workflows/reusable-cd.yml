@@ -1,4 +1,6 @@
-name: Reusable Django CD
+# Legacy compatibility workflow: Docker Hub 직행 방식이며 새 백엔드 CD에는 사용하지 않는다.
+# 실제 GCP 개발 배포 검증 후 새 build/deploy reusable workflow로 이동한다.
+name: Reusable Django CD (Legacy)
 
 on:
   workflow_call:

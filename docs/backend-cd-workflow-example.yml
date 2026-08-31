@@ -1,0 +1,90 @@
+# GCP 개발 자원과 중앙 v3.4.0 검증이 끝난 뒤 이 내용을
+# msg-backend/.github/workflows/ci-cd.yml에 반영한다.
+name: Backend CI and Development CD
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: main의 현재 commit을 개발 Cloud Run에 수동 배포
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  ci:
+    uses: MSG-CTF/jm_devsecops/.github/workflows/reusable-ci.yml@v3.4.0
+    with:
+      smoke_test_path: /admin/login/
+
+  build:
+    if: >-
+      (github.event_name == 'push' &&
+       github.ref == 'refs/heads/main' &&
+       vars.ENABLE_DEV_CD == 'true') ||
+      (github.event_name == 'workflow_dispatch' &&
+       github.ref == 'refs/heads/main' &&
+       inputs.deploy)
+    needs: ci
+    permissions:
+      contents: read
+      id-token: write
+      security-events: write
+    uses: MSG-CTF/jm_devsecops/.github/workflows/reusable-backend-build.yml@v3.4.0
+    with:
+      commit_sha: ${{ github.sha }}
+      project_id: ${{ vars.DEV_GCP_PROJECT_ID }}
+      region: ${{ vars.DEV_GCP_REGION }}
+      artifact_repository: ${{ vars.DEV_ARTIFACT_REPOSITORY }}
+      image_name: backend
+      workload_identity_provider: ${{ vars.DEV_GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      publisher_service_account: ${{ vars.DEV_GCP_PUBLISHER_SERVICE_ACCOUNT }}
+
+  deploy-development:
+    needs: build
+    permissions:
+      contents: read
+      id-token: write
+    uses: MSG-CTF/jm_devsecops/.github/workflows/reusable-backend-deploy-dev.yml@v3.4.0
+    with:
+      commit_sha: ${{ github.sha }}
+      project_id: ${{ vars.DEV_GCP_PROJECT_ID }}
+      region: ${{ vars.DEV_GCP_REGION }}
+      artifact_repository: ${{ vars.DEV_ARTIFACT_REPOSITORY }}
+      image_name: backend
+      image_ref: ${{ needs.build.outputs.image_ref }}
+      cloud_run_service: ${{ vars.DEV_BACKEND_SERVICE }}
+      migration_job: ${{ vars.DEV_MIGRATION_JOB }}
+      deployment_environment: development
+      backend_runtime_service_account: ${{ vars.DEV_BACKEND_RUNTIME_SERVICE_ACCOUNT }}
+      migration_runtime_service_account: ${{ vars.DEV_MIGRATION_RUNTIME_SERVICE_ACCOUNT }}
+      vpc_network: ${{ vars.DEV_VPC_NETWORK }}
+      vpc_subnet: ${{ vars.DEV_VPC_SUBNET }}
+      workload_identity_provider: ${{ vars.DEV_GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      deployer_service_account: ${{ vars.DEV_GCP_DEPLOYER_SERVICE_ACCOUNT }}
+      django_allowed_hosts: ${{ vars.DEV_DJANGO_ALLOWED_HOSTS }}
+      postgres_db: ${{ vars.DEV_POSTGRES_DB }}
+      postgres_user: ${{ vars.DEV_POSTGRES_USER }}
+      postgres_host: ${{ vars.DEV_POSTGRES_HOST }}
+      postgres_port: "5432"
+      redis_url: ${{ vars.DEV_REDIS_URL }}
+      scheduler_base_url: ${{ vars.DEV_SCHEDULER_BASE_URL }}
+      django_secret_id: django-secret-key-dev
+      django_secret_version: ${{ vars.DEV_DJANGO_SECRET_VERSION }}
+      jwt_secret_id: jwt-secret-dev
+      jwt_secret_version: ${{ vars.DEV_JWT_SECRET_VERSION }}
+      postgres_password_secret_id: postgres-password-dev
+      postgres_password_secret_version: ${{ vars.DEV_POSTGRES_PASSWORD_SECRET_VERSION }}
+      koth_secret_id: koth-team-token-secret-dev
+      koth_secret_version: ${{ vars.DEV_KOTH_SECRET_VERSION }}
+      smoke_test_path: /admin/login/
+      rollback_on_smoke_failure: true
+      run_dast: true
