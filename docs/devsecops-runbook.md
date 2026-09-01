@@ -235,11 +235,12 @@ jobs:
 
 1. 중앙 feature branch와 정확한 40자리 commit SHA로 먼저 시험한다.
 2. 백엔드 `ENABLE_DEV_CD=false` 상태에서 caller PR의 CI만 확인한다.
-3. GCP 준비 뒤 백엔드 `main`에서 `workflow_dispatch`의 `deploy=true`로 수동 배포한다.
-4. migration 실패 시 backend deploy가 시작되지 않는지 확인한다.
-5. smoke 실패 시 직전 revision으로 traffic이 돌아가는지 확인한다.
-6. 이 시험을 모두 통과한 중앙 commit만 병합하고 `v3.4.0` 태그를 만든다.
-7. 백엔드 caller를 `@v3.4.0`으로 바꾼 뒤에만 `ENABLE_DEV_CD=true`를 검토한다.
+3. GCP 준비 뒤 백엔드 `main`에서 `workflow_dispatch`의 `action=build`로 최초 image를 만든다.
+4. 관리자가 개발 service와 migration Job을 bootstrap한 뒤 `action=deploy`로 수동 배포한다.
+5. migration 실패 시 backend deploy가 시작되지 않는지 확인한다.
+6. smoke 실패 시 직전 revision으로 traffic이 돌아가는지 확인한다.
+7. 이 시험을 모두 통과한 중앙 commit만 병합하고 `v3.4.0` 태그를 만든다.
+8. 백엔드 caller를 `@v3.4.0`으로 바꾼 뒤에만 `ENABLE_DEV_CD=true`를 검토한다.
 
 GitHub에는 Django/JWT/DB/KOTH의 실제 값을 저장하지 않는다. 값은 GCP Secret Manager에 두고, caller에는 `latest`가 아닌 숫자 Secret version만 전달한다.
 

@@ -9,11 +9,15 @@ on:
     branches: ["main"]
   workflow_dispatch:
     inputs:
-      deploy:
-        description: main의 현재 commit을 개발 Cloud Run에 수동 배포
-        required: false
-        default: false
-        type: boolean
+      action:
+        description: main의 현재 commit에 실행할 작업
+        required: true
+        default: ci
+        type: choice
+        options:
+          - ci
+          - build
+          - deploy
 
 permissions:
   contents: read
@@ -32,7 +36,7 @@ jobs:
        vars.ENABLE_DEV_CD == 'true') ||
       (github.event_name == 'workflow_dispatch' &&
        github.ref == 'refs/heads/main' &&
-       inputs.deploy)
+       (inputs.action == 'build' || inputs.action == 'deploy'))
     needs: ci
     permissions:
       contents: read
@@ -49,6 +53,9 @@ jobs:
       publisher_service_account: ${{ vars.DEV_GCP_PUBLISHER_SERVICE_ACCOUNT }}
 
   deploy-development:
+    if: >-
+      (github.event_name == 'push' && vars.ENABLE_DEV_CD == 'true') ||
+      (github.event_name == 'workflow_dispatch' && inputs.action == 'deploy')
     needs: build
     permissions:
       contents: read

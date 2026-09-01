@@ -1,5 +1,7 @@
 # 백엔드 GitHub CD 연결 안내
 
+프론트·백엔드·GCP를 하나의 웹사이트로 연결하는 전체 개념과 팀별 작업 순서는 [`fullstack-gcp-workflow-easy-guide.md`](fullstack-gcp-workflow-easy-guide.md)를 먼저 읽는다.
+
 ## 결론
 
 `v3.3.1`에서 실제 검증된 것은 백엔드 CI다. 기존 `reusable-cd.yml`은 Docker Hub에서 Cloud Run으로 바로 배포하는 초기 골격이며, migration과 개발 GCP 구조를 반영하지 못하므로 현재 백엔드에서 활성화하지 않는다.
@@ -142,7 +144,7 @@ ci
 └─ PR와 main에서 항상 실행
 
 build
-└─ CI 성공 + 수동 deploy 선택 또는 ENABLE_DEV_CD=true인 main push
+└─ CI 성공 + 수동 action=build/deploy 선택 또는 ENABLE_DEV_CD=true인 main push
 
 deploy-development
 └─ build가 출력한 exact image digest로 migration과 개발 배포
@@ -182,12 +184,14 @@ caller 변경 PR에서는 기존 CI가 그대로 통과하는지 먼저 확인�
 
 1. GCP 자원과 Repository Variables를 준비한다.
 2. Actions에서 `Backend CI and Development CD`를 선택한다.
-3. branch는 `main`, `deploy`는 `true`를 선택한다.
-4. build 결과의 commit SHA, image digest를 기록한다.
-5. migration Job 성공을 확인한다.
-6. backend service URL과 revision을 확인한다.
-7. smoke와 rollback 시험을 확인한다.
-8. Actions artifact에서 ZAP 보고서를 내려받아 Medium 이하 경고의 기준선을 정한다.
+3. 최초 bootstrap에서는 branch `main`, `action=build`를 선택해 image만 만든다.
+4. 관리자가 그 digest로 개발 service와 migration Job을 한 번 생성하고 resource 단위 IAM을 설정한다.
+5. 실제 배포 시험에서는 branch `main`, `action=deploy`를 선택한다.
+6. build 결과의 commit SHA, image digest를 기록한다.
+7. migration Job 성공을 확인한다.
+8. backend service URL과 revision을 확인한다.
+9. smoke와 rollback 시험을 확인한다.
+10. Actions artifact에서 ZAP 보고서를 내려받아 Medium 이하 경고의 기준선을 정한다.
 
 WIF가 `refs/heads/main`으로 제한되어 있으므로 다른 branch를 수동 선택하면 인증이 실패하는 것이 정상이다.
 
@@ -267,4 +271,4 @@ GitHub 파일이 존재하는 것만으로 CD 완료가 아니다. 다음 조건
 - GitHub log에 실제 Secret 값이 없음
 - 중앙 검증 commit과 `v3.4.0` 태그가 일치
 
-현재 GCP 자원이 없는 상태에서는 정적 검증까지만 가능하다. 실제 수동 배포 검증 전에는 `v3.4.0`을 발행하지 않는다.
+현재 VPC, Registry, WIF, 서비스 계정과 기본 Secret은 준비됐지만 Cloud SQL·Redis·Cloud Run bootstrap은 남아 있다. 실제 수동 배포 검증 전에는 `v3.4.0`을 발행하지 않는다.

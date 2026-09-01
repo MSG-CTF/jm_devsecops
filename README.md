@@ -9,6 +9,7 @@
 - 안정적으로 사용 중인 범위는 CI `v3.3.1`까지다. Artifact Registry와 개발 Cloud Run용 CD는 `v3.4.0` 후보이며 실제 GCP 시험 전에는 태그를 발행하거나 백엔드에서 켜지 않는다.
 - 백엔드는 움직이는 `@main`이 아니라 고정된 `@v3.3.1`을 호출해야 한다.
 - 별도의 `/healthz` API는 요구하지 않는다. CI와 CD는 기존 `/admin/login/`을 한 번 요청해서 시작 여부만 확인한다.
+- 프론트·백엔드·GCP 전체 개념과 작업 순서는 [`docs/fullstack-gcp-workflow-easy-guide.md`](docs/fullstack-gcp-workflow-easy-guide.md)에 쉬운 말로 정리했다.
 
 ```text
 백엔드 개발자가 push 또는 PR 생성

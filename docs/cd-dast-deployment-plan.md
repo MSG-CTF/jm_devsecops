@@ -1,5 +1,7 @@
 # MSG CTF CD·DAST·통합 배포 작업 계획서
 
+용어와 전체 흐름을 더 쉽게 설명한 문서는 [`fullstack-gcp-workflow-easy-guide.md`](fullstack-gcp-workflow-easy-guide.md)다.
+
 작성 기준일: 2026-08-26
 
 대상: `MSG-CTF/jm_devsecops`, `MSG-CTF/msg-backend`, 프론트엔드 저장소, GCP
