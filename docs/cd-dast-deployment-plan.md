@@ -8,6 +8,8 @@
 
 > 2026-08-31 진행 상태: 백엔드용 Artifact Registry build, migration Job, 개발 Cloud Run 배포, smoke, rollback, ZAP passive baseline workflow는 `v3.4.0` 후보로 구현했다. 아직 GCP 자원에서 실제 실행하지 않았으므로 완료·release 상태가 아니다. 프론트 CD, 한 주소 연결, 인증/active DAST와 production 승격도 이 후보 범위에 포함되지 않는다.
 
+> 2026-09-01 보안 보완: GitHub deployer에는 프로젝트 전체 Cloud Run Admin을 주지 않는다. 첫 image가 생성된 뒤 관리자가 개발 service/Job을 bootstrap하고 공개 IAM을 명시적으로 승인한 다음, deployer에는 그 두 resource의 수정·실행 권한만 부여한다.
+
 ## 0. 가장 쉬운 요약
 
 현재 CI는 코드가 안전하게 합쳐질 수 있는지 검사하는 **출고 전 검사대**다. 이제 만들 CD는 검사에 합격한 프로그램을 실제 개발 사이트에 올리는 **배달 시스템**이다. DAST는 올려진 사이트를 밖에서 사용해 보며 보안 문제를 찾는 **모의 점검자**다.

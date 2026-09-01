@@ -226,10 +226,19 @@ CI
 GitHub 계정은 프로젝트 Owner가 아니어야 하고 이미지 게시와 배포 계정을 나눈다.
 
 - publisher 계정: 지정 Artifact Registry repository의 reader/writer만 부여
-- deployer 계정: 개발 Cloud Run service와 migration Job 배포·Job 실행
+- deployer 계정: 미리 생성한 `msg-backend-dev` service와 `msg-backend-migrate-dev` Job만 수정·실행
 - deployer 계정: 지정 backend/migration runtime 서비스 계정 사용
 - deployer 계정: 지정 VPC/subnet을 사용하는 데 필요한 권한
 - Secret 값 읽기 권한은 GitHub 계정이 아니라 backend/migration runtime 서비스 계정에만 부여
+
+프로젝트 전체 `roles/run.admin`은 부여하지 않는다. 첫 build가 Artifact Registry에 image digest를 만든 뒤 관리자가 다음 bootstrap을 한 번 수행한다.
+
+1. 해당 digest로 `msg-backend-dev` service와 `msg-backend-migrate-dev` Job을 생성한다.
+2. 개발 service를 외부에 공개할지 사람이 확인하고 service IAM에 `allUsers` invoker를 한 번만 설정한다.
+3. deployer에는 해당 service와 Job 각각에 `roles/run.developer`를 부여한다.
+4. 해당 Job에만 `roles/run.jobsExecutor`를 추가한다.
+
+그 뒤 reusable deploy workflow는 공개 IAM을 변경하지 않고 기존 service와 Job의 revision만 갱신한다. 이렇게 하면 workflow가 프로젝트의 기존 `ctf-backend`나 나중에 만들 다른 서비스까지 변경하지 못한다.
 
 WIF 조건도 저장소 이름만 확인하면 부족하다. 검증 중에는 중앙 후보의 정확한 commit SHA를, 공개 후에는 아래 두 `job_workflow_ref`와 백엔드 `main`을 함께 허용한다.
 

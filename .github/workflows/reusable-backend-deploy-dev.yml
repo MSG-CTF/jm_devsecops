@@ -423,7 +423,6 @@ jobs:
             --vpc-egress=private-ranges-only \
             --env-vars-file="$RUNNER_TEMP/backend-dev-env.yaml" \
             --set-secrets="$secrets" \
-            --allow-unauthenticated \
             --labels="managed-by=github-actions,commit-sha=$COMMIT_SHA" \
             --quiet
 
