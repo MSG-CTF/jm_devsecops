@@ -166,8 +166,11 @@ jobs:
       - name: 비루트-사용자-확인
         run: |
           container_user="$(docker image inspect ctf-frontend:test --format '{{.Config.User}}')"
-          if [ -z "$container_user" ] || [ "$container_user" = "0" ] || [ "$container_user" = "root" ]; then
-            echo "컨테이너가 root 사용자로 실행되도록 설정되어 있습니다."
+          # USER는 "사용자:그룹" 형태도 가능하므로 콜론 앞의 사용자 부분만 비교한다.
+          # (이 처리가 없으면 USER 0:0 / root:root 가 root인데도 통과한다)
+          uid_part="${container_user%%:*}"
+          if [ -z "$uid_part" ] || [ "$uid_part" = "0" ] || [ "$uid_part" = "root" ]; then
+            echo "컨테이너가 root 사용자로 실행되도록 설정되어 있습니다. (USER=${container_user:-미지정})"
             exit 1
           fi
 
