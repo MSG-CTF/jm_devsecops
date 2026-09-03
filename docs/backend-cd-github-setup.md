@@ -27,7 +27,7 @@ reusable-backend-deploy-dev.yml
    → 실패 시 가능한 경우 직전 revision으로 rollback
 ```
 
-이 파일은 GitHub 쪽 배포 절차를 준비한다. Cloud SQL, Redis, VPC, Artifact Registry, Secret Manager와 서비스 계정은 별도 인프라 작업으로 먼저 만들어야 실제 실행이 성공한다.
+이 파일은 GitHub 쪽 배포 절차를 준비한다. 현재 결정에 따라 Cloud SQL과 Memorystore는 만들지 않는다. 사설 IP의 자체 운영 PostgreSQL·Redis, VPC, Artifact Registry, Secret Manager와 서비스 계정은 별도 인프라 작업으로 먼저 준비해야 실제 실행이 성공한다. 데이터 서버의 상세 계획은 [`self-managed-postgres-redis-deployment-plan.md`](self-managed-postgres-redis-deployment-plan.md)를 따른다.
 
 ## 기존 CD를 바로 바꾸지 않는 이유
 
@@ -49,10 +49,10 @@ reusable-backend-deploy-dev.yml
 ## 새 Development Deploy workflow가 보장하는 것
 
 1. image가 지정한 GCP project/repository/image의 digest인지 검사한다.
-2. VPC·subnet과 네 개 Secret 숫자 version이 실제로 존재하고 활성 상태인지 확인한다.
+2. VPC·subnet과 다섯 개 Secret 숫자 version이 실제로 존재하고 활성 상태인지 확인한다.
 3. migration Job과 backend service가 서로 다른 최소 권한 runtime 계정을 사용한다.
-4. Direct VPC egress로 private Cloud SQL과 Redis에 접근한다.
-5. 같은 image digest로 `python manage.py migrate --noinput`을 먼저 실행한다.
+4. Direct VPC egress로 사설 IP의 자체 운영 PostgreSQL과 Redis에 접근한다.
+5. 같은 image digest로 PostgreSQL `SELECT 1`, Redis `PING`·임시 저장·조회·삭제를 확인한 뒤 `python manage.py migrate --noinput`을 실행한다.
 6. migration이 실패하면 shell의 non-zero exit로 workflow가 멈춰 backend deploy step이 실행되지 않는다.
 7. migration이 성공한 경우에만 개발 Cloud Run에 같은 digest를 배포한다.
 8. `/admin/login/`을 최대 20번 확인한다.
@@ -84,11 +84,12 @@ Baseline 검사는 SQL injection 같은 공격 요청을 적극적으로 보내�
 | `DEV_MIGRATION_RUNTIME_SERVICE_ACCOUNT` | migration runtime 서비스 계정 이메일 |
 | `DEV_VPC_NETWORK` | `msg-dev-vpc` |
 | `DEV_VPC_SUBNET` | `msg-dev-subnet` |
+| `DEV_DATA_NETWORK_TAG` | 자체 운영 PostgreSQL·Redis 방화벽이 허용할 개발 workload tag. 예: `msg-backend-data-dev` |
 | `DEV_DJANGO_ALLOWED_HOSTS` | scheme/path가 없는 정확한 Cloud Run host 목록 |
 | `DEV_POSTGRES_DB` | `msg_backend` |
 | `DEV_POSTGRES_USER` | `msg_app` |
-| `DEV_POSTGRES_HOST` | Cloud SQL private IP |
-| `DEV_REDIS_URL` | `redis://<private-ip>:6379/1` |
+| `DEV_POSTGRES_HOST` | 자체 운영 PostgreSQL의 고정 사설 IP 또는 내부 DNS |
+| `DEV_REDIS_SECRET_VERSION` | `redis-url-dev`의 숫자 version |
 | `DEV_SCHEDULER_BASE_URL` | 경로가 없는 실제 개발 Scheduler origin |
 | `DEV_DJANGO_SECRET_VERSION` | `django-secret-key-dev`의 숫자 version |
 | `DEV_JWT_SECRET_VERSION` | `jwt-secret-dev`의 숫자 version |
@@ -118,6 +119,7 @@ https://msg-scheduler-dev-269174025178.asia-northeast3.run.app
 - Django secret key
 - JWT signing key
 - PostgreSQL password
+- 인증정보를 포함한 Redis URL
 - KOTH team token secret
 
 실제 값은 GCP Secret Manager에 있고 GitHub에는 숫자 version만 기록한다.
@@ -271,4 +273,4 @@ GitHub 파일이 존재하는 것만으로 CD 완료가 아니다. 다음 조건
 - GitHub log에 실제 Secret 값이 없음
 - 중앙 검증 commit과 `v3.4.0` 태그가 일치
 
-현재 VPC, Registry, WIF, 서비스 계정과 기본 Secret은 준비됐지만 Cloud SQL·Redis·Cloud Run bootstrap은 남아 있다. 실제 수동 배포 검증 전에는 `v3.4.0`을 발행하지 않는다.
+현재 VPC, Registry, WIF, 서비스 계정과 기본 Secret은 준비됐고 Redis URL Secret 연결은 CD 후보에 반영했다. 자체 운영 PostgreSQL·Redis, 실제 `redis-url-dev` Secret과 Cloud Run bootstrap은 남아 있다. 실제 수동 배포 검증 전에는 `v3.4.0`을 발행하지 않는다.

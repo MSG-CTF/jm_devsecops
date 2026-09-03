@@ -2,6 +2,8 @@
 
 이 문서는 MSG CTF 개발 사이트를 만들면서 나오는 개념과 작업 순서를 12세도 따라갈 수 있는 수준으로 설명한다.
 
+> 데이터 계층 결정 변경: 개발 PostgreSQL과 Redis는 Cloud SQL·Memorystore가 아니라 팀이 직접 운영한다. 이 문서에 남아 있는 관리형 서비스 예시보다 [`self-managed-postgres-redis-deployment-plan.md`](self-managed-postgres-redis-deployment-plan.md)를 우선 적용한다.
+
 각 작업은 항상 다음 다섯 가지를 확인한다.
 
 1. 무엇인가?
@@ -21,8 +23,8 @@
 프론트 Cloud Run의 Nginx
        ├── /            → React 화면
        └── /api/v1/*    → 백엔드 Cloud Run
-                              ├── Cloud SQL PostgreSQL
-                              ├── Memorystore Redis
+                              ├── 자체 운영 PostgreSQL
+                              ├── 자체 운영 Redis
                               └── Scheduler
 ```
 
@@ -266,24 +268,19 @@ rollback은 새 revision이 실패했을 때 사용자 traffic을 직전 정상 
 
 승인: DevSecOps. 현재 이 단계는 완료됐다.
 
-### 3단계: 유료 데이터 자원
+### 3단계: 자체 운영 데이터 서버
 
-무엇: private Cloud SQL과 private Redis를 만든다.
+무엇: 승인된 데이터 전용 VM에 PostgreSQL과 Redis를 직접 설치하고 사설 IP로만 제공한다.
 
-왜: 실제 백엔드를 실행하려면 영구 DB와 cache가 필요하다.
+왜: 실제 백엔드를 실행하려면 영구 DB와 cache가 필요하지만, 팀 결정에 따라 Google 관리형 서비스는 사용하지 않는다.
 
-보안: public IP를 사용하지 않고 DB password와 Redis AUTH를 Secret Manager에 둔다.
+보안: 5432와 6379를 인터넷에 열지 않고 PostgreSQL password와 인증정보가 포함된 Redis URL을 Secret Manager에 둔다.
 
-성공 확인: 사설 IP에서만 연결되고 간단한 PostgreSQL query와 Redis 저장·조회가 성공한다.
+성공 확인: 허용된 Cloud Run Job에서만 PostgreSQL query와 Redis 저장·조회가 성공하고, PostgreSQL backup을 빈 환경에 실제 복구한다.
 
-승인: 비용과 backup 정책을 책임지는 사람. 생성 즉시 계속 과금되므로 반드시 먼저 확인한다.
+승인: VM 비용, OS·DB 패치, backup과 장애 복구를 책임지는 사람. 직접 운영 VM과 디스크도 계속 과금되므로 반드시 먼저 확인한다.
 
-권장 개발 사양은 다음과 같다.
-
-```text
-Cloud SQL: PostgreSQL 16, db-f1-micro, SSD 10GB, zonal, private IP
-Redis: Basic 1GiB, private access, AUTH
-```
+서버 배치, 방화벽, Secret, 백업과 복구의 전체 순서는 [`self-managed-postgres-redis-deployment-plan.md`](self-managed-postgres-redis-deployment-plan.md)를 따른다.
 
 ### 4단계: 백엔드 image만 최초 build
 
@@ -406,8 +403,9 @@ API 형식을 바꿀 때는 순서를 지킨다.
 
 아직 필요:
 
-- Cloud SQL과 Redis 비용 승인 및 생성
-- Redis AUTH를 Secret으로 연결하는 CD 보완
+- 자체 운영 PostgreSQL·Redis 서버 배치와 비용 승인
+- PostgreSQL backup·restore 및 Redis persistence 정책
+- 인증정보가 포함된 Redis URL을 Secret Manager로 연결하는 CD 후보 구현 완료, 실제 Secret 생성은 남음
 - 실제 `SCHEDULER_BASE_URL`
 - 백엔드 caller branch/PR 승인
 - 최초 backend image build와 Cloud Run bootstrap

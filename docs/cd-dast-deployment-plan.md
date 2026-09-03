@@ -2,6 +2,8 @@
 
 용어와 전체 흐름을 더 쉽게 설명한 문서는 [`fullstack-gcp-workflow-easy-guide.md`](fullstack-gcp-workflow-easy-guide.md)다.
 
+> 2026-09-03 데이터 계층 결정 변경: 개발 PostgreSQL과 Redis는 Cloud SQL·Memorystore가 아니라 팀이 직접 운영한다. 이 문서에 남아 있는 관리형 서비스 예시보다 [`self-managed-postgres-redis-deployment-plan.md`](self-managed-postgres-redis-deployment-plan.md)의 서버 배치, 방화벽, Secret, 백업·복구 기준을 우선 적용한다.
+
 작성 기준일: 2026-08-26
 
 대상: `MSG-CTF/jm_devsecops`, `MSG-CTF/msg-backend`, 프론트엔드 저장소, GCP

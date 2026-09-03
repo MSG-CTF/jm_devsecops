@@ -75,6 +75,7 @@ jobs:
       migration_runtime_service_account: ${{ vars.DEV_MIGRATION_RUNTIME_SERVICE_ACCOUNT }}
       vpc_network: ${{ vars.DEV_VPC_NETWORK }}
       vpc_subnet: ${{ vars.DEV_VPC_SUBNET }}
+      data_network_tag: ${{ vars.DEV_DATA_NETWORK_TAG }}
       workload_identity_provider: ${{ vars.DEV_GCP_WORKLOAD_IDENTITY_PROVIDER }}
       deployer_service_account: ${{ vars.DEV_GCP_DEPLOYER_SERVICE_ACCOUNT }}
       django_allowed_hosts: ${{ vars.DEV_DJANGO_ALLOWED_HOSTS }}
@@ -82,7 +83,6 @@ jobs:
       postgres_user: ${{ vars.DEV_POSTGRES_USER }}
       postgres_host: ${{ vars.DEV_POSTGRES_HOST }}
       postgres_port: "5432"
-      redis_url: ${{ vars.DEV_REDIS_URL }}
       scheduler_base_url: ${{ vars.DEV_SCHEDULER_BASE_URL }}
       django_secret_id: django-secret-key-dev
       django_secret_version: ${{ vars.DEV_DJANGO_SECRET_VERSION }}
@@ -90,6 +90,8 @@ jobs:
       jwt_secret_version: ${{ vars.DEV_JWT_SECRET_VERSION }}
       postgres_password_secret_id: postgres-password-dev
       postgres_password_secret_version: ${{ vars.DEV_POSTGRES_PASSWORD_SECRET_VERSION }}
+      redis_secret_id: redis-url-dev
+      redis_secret_version: ${{ vars.DEV_REDIS_SECRET_VERSION }}
       koth_secret_id: koth-team-token-secret-dev
       koth_secret_version: ${{ vars.DEV_KOTH_SECRET_VERSION }}
       smoke_test_path: /admin/login/

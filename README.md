@@ -31,7 +31,7 @@
      중앙 build/deploy workflow 호출
                 │
                 ▼
- 보안 검사 → Artifact Registry → migration Job → 개발 Cloud Run → smoke·ZAP/rollback
+ 보안 검사 → Artifact Registry → DB·Redis 연결 검사 → migration Job → 개발 Cloud Run → smoke·ZAP/rollback
 ```
 
 ## CI와 CD가 무엇인가
@@ -72,6 +72,7 @@ docs/
 │   └── .dockerignore              백엔드용 Docker 제외 목록 예제
 ├── backend-cd-workflow-example.yml  백엔드 CI와 개발 CD 호출 예제
 ├── backend-cd-github-setup.md       GitHub CD 변수와 안전한 연결 순서
+├── self-managed-postgres-redis-deployment-plan.md  자체 운영 데이터 서버 계획
 └── devsecops-runbook.md             설정과 운영 작업 순서
 
 Dockerfile / manage.py / config/ / requirements.txt
@@ -238,14 +239,13 @@ reusable-backend-deploy-dev.yml
 GCP 전제조건 → 같은 digest로 migration Job → 개발 Cloud Run → smoke·ZAP → 필요 시 rollback
 ```
 
-GitHub 파일의 정적 준비와 실제 배포 완료는 다르다. Cloud SQL, Redis, VPC, Secret Manager, Artifact Registry와 서비스 계정을 만든 뒤 실제 개발 GCP에서 수동 배포·실패·rollback까지 확인해야 `v3.4.0`을 공개할 수 있다.
+GitHub 파일의 정적 준비와 실제 배포 완료는 다르다. 사설 IP의 자체 운영 PostgreSQL·Redis, VPC, Secret Manager, Artifact Registry와 서비스 계정을 준비한 뒤 실제 개발 GCP에서 수동 배포·실패·rollback까지 확인해야 `v3.4.0`을 공개할 수 있다.
 
 CD를 켜기 전에 다음 준비가 필요하다.
 
-- Cloud SQL과 데이터베이스
-- Cloud Run에서 Cloud SQL로 연결하는 방법
-- Cloud Run이 접근할 수 있는 Redis
-- GCP Secret Manager의 Django, JWT, PostgreSQL Secret
+- 사설 IP의 자체 운영 PostgreSQL 16.14와 Redis 7.2
+- Cloud Run에서 Direct VPC egress로 데이터 서버에 연결하는 방법
+- GCP Secret Manager의 Django, JWT, PostgreSQL, Redis URL Secret
 - Secret의 `latest`가 아닌 숫자 버전
 - migration을 먼저 실행할 별도 Cloud Run Job과 runtime 서비스 계정
 - 이미지 게시 계정과 Cloud Run 배포 계정을 분리한 최소 권한 IAM
@@ -273,9 +273,9 @@ commit SHA는 코드의 주민등록번호와 비슷하고, 이미지 digest는 
 
 1. GitHub `development` Environment의 승인 규칙을 거친다.
 2. 저장된 장기 GCP 키 대신 Workload Identity Federation으로 인증한다.
-3. Docker 태그가 아니라 검사한 digest로 migration Job을 먼저 실행한다.
+3. Docker 태그가 아니라 검사한 digest로 PostgreSQL·Redis 연결 검사와 migration Job을 먼저 실행한다.
 4. 일반 설정값은 환경변수로 전달한다.
-5. Django 키, JWT 키, DB 비밀번호는 Secret Manager의 고정 숫자 버전에서 가져온다.
+5. Django 키, JWT 키, DB 비밀번호와 Redis URL은 Secret Manager의 고정 숫자 버전에서 가져온다.
 6. migration 성공 후 같은 digest를 개발 Cloud Run에 배포한다.
 7. Cloud Run URL의 `/admin/login/`을 한 번 요청한다.
 8. OWASP ZAP passive baseline으로 실행 중인 개발 서비스를 검사하고 보고서를 남긴다.

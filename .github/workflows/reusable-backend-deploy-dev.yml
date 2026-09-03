@@ -53,11 +53,15 @@ on:
         required: true
         type: string
       vpc_network:
-        description: Cloud SQL·Redis에 연결된 VPC 이름
+        description: 자체 운영 PostgreSQL·Redis가 연결된 VPC 이름
         required: true
         type: string
       vpc_subnet:
         description: Direct VPC egress에 사용할 같은 리전 subnet 이름
+        required: true
+        type: string
+      data_network_tag:
+        description: PostgreSQL·Redis 방화벽이 허용할 Cloud Run 전용 network tag
         required: true
         type: string
       workload_identity_provider:
@@ -81,17 +85,13 @@ on:
         required: true
         type: string
       postgres_host:
-        description: 개발 Cloud SQL private IP 또는 내부 hostname
+        description: 자체 운영 PostgreSQL의 고정 private IP 또는 내부 hostname
         required: true
         type: string
       postgres_port:
         description: PostgreSQL port
         required: false
         default: "5432"
-        type: string
-      redis_url:
-        description: 개발 Redis private URL
-        required: true
         type: string
       scheduler_base_url:
         description: 경로가 없는 개발 Scheduler http/https origin
@@ -122,6 +122,15 @@ on:
         type: string
       postgres_password_secret_version:
         description: PostgreSQL password의 숫자 Secret version
+        required: true
+        type: string
+      redis_secret_id:
+        description: 인증정보를 포함한 Redis URL Secret Manager secret ID
+        required: false
+        default: redis-url-dev
+        type: string
+      redis_secret_version:
+        description: Redis URL의 latest가 아닌 숫자 Secret version
         required: true
         type: string
       koth_secret_id:
@@ -186,12 +195,12 @@ jobs:
       MIGRATION_RUNTIME_SERVICE_ACCOUNT: ${{ inputs.migration_runtime_service_account }}
       VPC_NETWORK: ${{ inputs.vpc_network }}
       VPC_SUBNET: ${{ inputs.vpc_subnet }}
+      DATA_NETWORK_TAG: ${{ inputs.data_network_tag }}
       DJANGO_ALLOWED_HOSTS: ${{ inputs.django_allowed_hosts }}
       POSTGRES_DB: ${{ inputs.postgres_db }}
       POSTGRES_USER: ${{ inputs.postgres_user }}
       POSTGRES_HOST: ${{ inputs.postgres_host }}
       POSTGRES_PORT: ${{ inputs.postgres_port }}
-      REDIS_URL: ${{ inputs.redis_url }}
       SCHEDULER_BASE_URL: ${{ inputs.scheduler_base_url }}
       DJANGO_SECRET_ID: ${{ inputs.django_secret_id }}
       DJANGO_SECRET_VERSION: ${{ inputs.django_secret_version }}
@@ -199,6 +208,8 @@ jobs:
       JWT_SECRET_VERSION: ${{ inputs.jwt_secret_version }}
       POSTGRES_PASSWORD_SECRET_ID: ${{ inputs.postgres_password_secret_id }}
       POSTGRES_PASSWORD_SECRET_VERSION: ${{ inputs.postgres_password_secret_version }}
+      REDIS_SECRET_ID: ${{ inputs.redis_secret_id }}
+      REDIS_SECRET_VERSION: ${{ inputs.redis_secret_version }}
       KOTH_SECRET_ID: ${{ inputs.koth_secret_id }}
       KOTH_SECRET_VERSION: ${{ inputs.koth_secret_version }}
       SMOKE_TEST_PATH: ${{ inputs.smoke_test_path }}
@@ -227,9 +238,11 @@ jobs:
             "$MIGRATION_JOB" \
             "$VPC_NETWORK" \
             "$VPC_SUBNET" \
+            "$DATA_NETWORK_TAG" \
             "$DJANGO_SECRET_ID" \
             "$JWT_SECRET_ID" \
             "$POSTGRES_PASSWORD_SECRET_ID" \
+            "$REDIS_SECRET_ID" \
             "$KOTH_SECRET_ID"
           do
             [[ "$value" =~ ^[a-z][a-z0-9._-]{0,62}$ ]] || {
@@ -237,6 +250,10 @@ jobs:
               exit 1
             }
           done
+          [[ "$DATA_NETWORK_TAG" =~ ^[a-z][a-z0-9-]{0,62}$ ]] || {
+            echo "data_network_tag는 소문자, 숫자와 하이픈만 사용하는 1~63자 tag여야 합니다."
+            exit 1
+          }
           for account in \
             "$BACKEND_RUNTIME_SERVICE_ACCOUNT" \
             "$MIGRATION_RUNTIME_SERVICE_ACCOUNT"
@@ -260,10 +277,6 @@ jobs:
             echo "postgres_port 형식이 올바르지 않습니다."
             exit 1
           }
-          [[ "$REDIS_URL" =~ ^rediss?://[^[:space:]]+$ ]] || {
-            echo "redis_url은 redis:// 또는 rediss://로 시작해야 합니다."
-            exit 1
-          }
           [[ "$SCHEDULER_BASE_URL" =~ ^https?://[^/[:space:]]+/?$ ]] || {
             echo "scheduler_base_url은 경로가 없는 http/https origin이어야 합니다."
             exit 1
@@ -279,6 +292,7 @@ jobs:
             "$DJANGO_SECRET_VERSION" \
             "$JWT_SECRET_VERSION" \
             "$POSTGRES_PASSWORD_SECRET_VERSION" \
+            "$REDIS_SECRET_VERSION" \
             "$KOTH_SECRET_VERSION"
           do
             [[ "$version" =~ ^[1-9][0-9]*$ ]] || {
@@ -313,6 +327,7 @@ jobs:
             "$DJANGO_SECRET_ID:$DJANGO_SECRET_VERSION" \
             "$JWT_SECRET_ID:$JWT_SECRET_VERSION" \
             "$POSTGRES_PASSWORD_SECRET_ID:$POSTGRES_PASSWORD_SECRET_VERSION" \
+            "$REDIS_SECRET_ID:$REDIS_SECRET_VERSION" \
             "$KOTH_SECRET_ID:$KOTH_SECRET_VERSION"
           do
             secret_id="${item%%:*}"
@@ -339,7 +354,6 @@ jobs:
             --arg postgres_user "$POSTGRES_USER" \
             --arg postgres_host "$POSTGRES_HOST" \
             --arg postgres_port "$POSTGRES_PORT" \
-            --arg redis_url "$REDIS_URL" \
             --arg scheduler_base_url "$SCHEDULER_BASE_URL" \
             '{
               DJANGO_DEBUG: "False",
@@ -348,13 +362,13 @@ jobs:
               POSTGRES_USER: $postgres_user,
               POSTGRES_HOST: $postgres_host,
               POSTGRES_PORT: $postgres_port,
-              REDIS_URL: $redis_url,
               SCHEDULER_BASE_URL: $scheduler_base_url
             }' > "$RUNNER_TEMP/backend-dev-env.yaml"
 
           secrets="DJANGO_SECRET_KEY=${DJANGO_SECRET_ID}:${DJANGO_SECRET_VERSION}"
           secrets+=",JWT_SECRET=${JWT_SECRET_ID}:${JWT_SECRET_VERSION}"
           secrets+=",POSTGRES_PASSWORD=${POSTGRES_PASSWORD_SECRET_ID}:${POSTGRES_PASSWORD_SECRET_VERSION}"
+          secrets+=",REDIS_URL=${REDIS_SECRET_ID}:${REDIS_SECRET_VERSION}"
           secrets+=",KOTH_TEAM_TOKEN_SECRET=${KOTH_SECRET_ID}:${KOTH_SECRET_VERSION}"
           echo "secrets=${secrets}" >> "$GITHUB_ENV"
 
@@ -382,6 +396,8 @@ jobs:
         run: |
           set -euo pipefail
 
+          dependency_check='import os, subprocess, sys, uuid; import psycopg, redis; connection = psycopg.connect(dbname=os.environ["POSTGRES_DB"], user=os.environ["POSTGRES_USER"], password=os.environ["POSTGRES_PASSWORD"], host=os.environ["POSTGRES_HOST"], port=os.environ["POSTGRES_PORT"], connect_timeout=10); cursor = connection.cursor(); cursor.execute("SELECT 1"); assert cursor.fetchone() == (1,); cursor.close(); connection.close(); client = redis.Redis.from_url(os.environ["REDIS_URL"], socket_connect_timeout=10, socket_timeout=10); assert client.ping(); key = "cd:connectivity:" + uuid.uuid4().hex; assert client.set(key, "ok", ex=60); assert client.get(key) == b"ok"; client.delete(key); subprocess.run([sys.executable, "manage.py", "migrate", "--noinput"], check=True)'
+
           gcloud run jobs deploy "$MIGRATION_JOB" \
             --project="$PROJECT_ID" \
             --region="$REGION" \
@@ -389,11 +405,12 @@ jobs:
             --service-account="$MIGRATION_RUNTIME_SERVICE_ACCOUNT" \
             --network="$VPC_NETWORK" \
             --subnet="$VPC_SUBNET" \
+            --network-tags="$DATA_NETWORK_TAG" \
             --vpc-egress=private-ranges-only \
             --env-vars-file="$RUNNER_TEMP/backend-dev-env.yaml" \
             --set-secrets="$secrets" \
             --command=python \
-            --args=manage.py,migrate,--noinput \
+            --args="^|^-c|$dependency_check" \
             --tasks=1 \
             --parallelism=1 \
             --max-retries=0 \
@@ -420,6 +437,7 @@ jobs:
             --service-account="$BACKEND_RUNTIME_SERVICE_ACCOUNT" \
             --network="$VPC_NETWORK" \
             --subnet="$VPC_SUBNET" \
+            --network-tags="$DATA_NETWORK_TAG" \
             --vpc-egress=private-ranges-only \
             --env-vars-file="$RUNNER_TEMP/backend-dev-env.yaml" \
             --set-secrets="$secrets" \
