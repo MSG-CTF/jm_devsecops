@@ -9,6 +9,7 @@
 - CD 코드는 준비되어 있지만 아직 백엔드에서 호출하지 않는다. Cloud SQL, Redis, Secret Manager, 운영 migration 절차와 승인 규칙을 준비한 뒤 켜야 한다.
 - 백엔드는 움직이는 `@main`이 아니라 고정된 `@v3.3.1`을 호출해야 한다.
 - 별도의 `/healthz` API는 요구하지 않는다. CI와 CD는 기존 `/admin/login/`을 한 번 요청해서 시작 여부만 확인한다.
+- 프론트엔드(`MSG-CTF/front-team`)는 `reusable-frontend-ci.yml`을 `@v3.5.0`으로 호출한다. 검사 대상이 Node와 React라 백엔드와 별도 워크플로를 쓴다.
 
 ```text
 백엔드 개발자가 push 또는 PR 생성
@@ -58,9 +59,10 @@ CI와 CD는 연결되지만 역할이 다르다. CI가 실패하면 CD를 시작
 
 ```text
 .github/workflows/
-├── ci.yml                 중앙 저장소 자체 CI를 시작하는 파일
-├── reusable-ci.yml        백엔드가 호출하는 실제 공통 CI
-└── reusable-cd.yml        나중에 백엔드가 호출할 실제 공통 CD
+├── ci.yml                      중앙 저장소 자체 CI를 시작하는 파일
+├── reusable-ci.yml             백엔드가 호출하는 실제 공통 CI
+├── reusable-frontend-ci.yml    프론트엔드가 호출하는 공통 CI
+└── reusable-cd.yml             나중에 백엔드가 호출할 실제 공통 CD
 
 docs/
 ├── backend-workflow-example.yml   백엔드용 짧은 호출 파일 예제
@@ -301,6 +303,61 @@ jobs:
 
 전체 백엔드 파일 준비 방법과 나중에 CD를 연결하는 입력값은 [`docs/devsecops-runbook.md`](docs/devsecops-runbook.md)에서 확인한다.
 
+## 프론트엔드가 CI를 연결하는 방법
+
+프론트엔드는 Node와 React를 쓰므로 Python·Django 검사를 그대로 적용할 수 없다. 그래서 `reusable-ci.yml`이 아니라 `reusable-frontend-ci.yml`을 호출한다. 이 파일도 `workflow_call`만 트리거로 두므로 호출자 없이는 실행되지 않는다.
+
+### 입력값
+
+| 입력 | 기본값 | 설명 |
+|---|---|---|
+| `working-directory` | `.` | `package.json`이 있는 경로. `npm ci`와 Docker 빌드 컨텍스트의 기준이 된다 |
+| `dockerfile-path` | `./Dockerfile` | Dockerfile 경로. 저장소 루트 기준이다 |
+
+### 네 작업이 검사하는 것
+
+`security-scan`은 Gitleaks로 커밋 기록 전체의 비밀값을 찾고, Trivy 파일시스템 검사로 의존성의 알려진 취약점을 본다. HIGH와 CRITICAL은 수정본 유무와 관계없이 CI를 실패시킨다. 백엔드 `security-scan`과 같은 도구, 같은 판정 기준이다.
+
+`sast-scan`은 Semgrep으로 소스 코드의 취약 패턴을 찾는다. 규칙은 JS 스택에 맞춰 `p/javascript`와 `p/react`를 쓰고, ERROR 심각도가 하나라도 있으면 실패한다. 백엔드와 달리 Bandit은 쓰지 않는다. Python 전용 도구이기 때문이다.
+
+`docker-build-check`는 이미지를 빌드해서 비루트 사용자로 실행되는지 확인하고, Trivy 이미지 검사로 OS·라이브러리 취약점과 비밀값을 본다. 비루트 검사는 `USER`가 "사용자:그룹" 형식일 때 콜론 앞부분만 비교한다. 이 처리가 없으면 `USER 0:0`이 root인데도 통과한다.
+
+`build`는 `npm ci`로 lockfile에 고정된 버전만 설치한 뒤 `npm run build`를 돌려 빌드가 실제로 성공하는지 본다.
+
+`security-scan`과 `sast-scan`은 서로 독립적으로 병렬 실행된다. 두 검사를 한 작업에 두면 앞선 도구가 실패했을 때 뒤따르는 도구가 건너뛰어져 문제를 한 번에 볼 수 없기 때문이다. `docker-build-check`와 `build`는 `security-scan`이 통과해야 시작한다. 비밀값이 새거나 의존성에 CRITICAL이 있으면 이미지를 만들 이유가 없다.
+
+### 호출 예제
+
+프론트엔드 저장소에 `.github/workflows/ci.yml`을 만들고 다음처럼 호출한다.
+
+```yaml
+name: CI
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  frontend-code-scan:
+    uses: MSG-CTF/jm_devsecops/.github/workflows/reusable-frontend-ci.yml@v3.5.0
+    with:
+      working-directory: .
+      dockerfile-path: ./Dockerfile
+```
+
+호출자의 `permissions`에 `security-events: write`를 반드시 적어야 한다. `workflow_call`로 불린 워크플로는 호출자보다 넓은 권한을 가질 수 없어서, 이 값이 없으면 안에서 아무리 선언해도 SARIF가 GitHub Security 탭에 올라가지 않는다.
+
+트리거를 `workflow_dispatch`만 둔 것은 배포 타깃과 `/api/v1` 프록시 주체가 아직 정해지지 않았기 때문이다. 확정되면 `push`와 `pull_request`를 켠다.
+
+### 아직 하지 않는 것
+
+컨테이너를 띄워서 응답을 확인하는 smoke test는 넣지 않았다. 프론트는 SPA fallback 때문에 존재하지 않는 경로도 200을 반환하므로, 앱이 깨져도 통과하는 검사가 된다. 실질적인 확인 지점을 프론트엔드 저장소에 먼저 만든 뒤에 추가한다.
+
+레지스트리 push와 digest 발행도 이 워크플로가 하지 않는다. CI는 검사만 하고, 검사한 이미지를 밖으로 내보내는 일은 CD 워크플로가 맡는다.
+
 ## Branch protection에서 반드시 막아야 하는 작업
 
 백엔드 `main`의 Ruleset 또는 Branch protection에서 다음 네 작업을 필수 검사로 지정한다.
@@ -316,9 +373,20 @@ ci / docker-build-check
 
 백엔드에는 현재 `dev` 또는 `develop` 브랜치가 없으므로 예제는 `main`만 지정한다. 기능 브랜치에 push하면서 열린 PR을 갱신하면 `pull_request` 검사만 자동 실행되어 같은 commit의 `push` 검사와 중복되지 않는다. `workflow_dispatch`는 PR 전 수동 검사가 필요할 때 사용한다. 팀이 실제 통합 브랜치를 만든 뒤에는 그 정확한 브랜치 이름을 `push`와 `pull_request` 양쪽에 추가한다.
 
+프론트엔드 저장소는 다음 네 작업을 필수 검사로 지정한다. 호출하는 job 이름이 `frontend-code-scan`이면 표시되는 이름은 다음과 같다.
+
+```text
+frontend-code-scan / security-scan
+frontend-code-scan / sast-scan
+frontend-code-scan / docker-build-check
+frontend-code-scan / build
+```
+
+다만 프론트엔드 `ci.yml`은 현재 `workflow_dispatch`만 트리거로 두고 있어 PR에서 자동 실행되지 않는다. 필수 검사 지정은 `push`와 `pull_request` 트리거를 켠 뒤에 의미가 있다.
+
 ## 버전 관리 규칙
 
-현재 권장 안정 버전은 **`v3.3.1`**이다.
+백엔드가 호출하는 안정 버전은 **`v3.3.1`**이다. 프론트엔드는 **`v3.5.0`**부터 호출할 수 있다.
 
 | 버전 | 핵심 변경 |
 |---|---|
@@ -329,6 +397,7 @@ ci / docker-build-check
 | `v3.2.0` | Django·컨테이너 보안 강화, 수정본 없는 HIGH·CRITICAL도 차단 |
 | `v3.3.0` | Bandit Python SAST 추가 |
 | `v3.3.1` | 병합 commit의 각 부모 diff까지 Gitleaks 검사 범위에 포함하고 백엔드 호출 문서 보완 |
+| `v3.5.0` | 프론트엔드용 reusable CI(`reusable-frontend-ci.yml`) 추가 |
 
 이미 공개한 태그는 이동하거나 덮어쓰지 않는다. 같은 버전이 다른 코드를 가리키면 어느 검사를 실행했는지 믿을 수 없기 때문이다.
 
