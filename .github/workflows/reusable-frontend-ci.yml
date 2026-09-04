@@ -1,4 +1,4 @@
-name: frontend-ci-reusable
+name: Reusable Frontend CI
 
 # workflow_call만 트리거로 둔다 — 이 워크플로우는 이 저장소에서 직접 push/PR로
 # 도는 게 아니라, 다른 저장소(front-team)가 "불러줄 때만" 실행된다.
@@ -19,9 +19,12 @@ on:
 permissions:
   contents: read
 
-# 같은 브랜치에 연달아 push하면 이전 실행은 취소한다 - 어차피 결과가 무의미하다
+# 같은 브랜치에 연달아 push하면 이전 실행은 취소한다(어차피 결과가 무의미하다).
+# 이 워크플로는 여러 저장소가 호출할 수 있으므로 group 키에 호출 저장소와
+# 워크플로 이름까지 넣는다. github 컨텍스트는 호출자 기준이라, 아래 값은
+# 모두 caller(front-team 등)의 저장소·워크플로·브랜치가 들어온다.
 concurrency:
-  group: frontend-ci-${{ github.ref }}
+  group: frontend-ci-${{ github.repository }}-${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 jobs:
