@@ -168,8 +168,14 @@ jobs:
       - name: checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # inputs를 run: 안에 ${{ }}로 직접 보간하면 입력값이 셸 스크립트로 합성되어
+      # 스크립트 인젝션 표면이 된다. 백엔드 reusable-ci.yml의 SMOKE_TEST_PATH와
+      # 같은 방식으로 env:에 담아 넘기고, 셸 안에서는 인용한 변수로만 쓴다.
       - name: dockerfile-필수-확인
-        run: test -f "${{ inputs.dockerfile-path }}" || { echo "Dockerfile(${{ inputs.dockerfile-path }})이 없습니다."; exit 1; }
+        env:
+          DOCKERFILE_PATH: ${{ inputs.dockerfile-path }}
+        run: |
+          test -f "$DOCKERFILE_PATH" || { echo "Dockerfile($DOCKERFILE_PATH)이 없습니다."; exit 1; }
 
       - name: set-up-docker-buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
@@ -177,7 +183,13 @@ jobs:
       # front-team 확인 결과: 루트 Dockerfile은 npm ci -> npm run build(Vite)로
       # dist/를 만들고, 이를 nginx의 /usr/share/nginx/html로 서빙하는 멀티스테이지 빌드.
       - name: 테스트-이미지-빌드
-        run: docker build . --file "${{ inputs.dockerfile-path }}" --tag ctf-frontend:test
+        # 빌드 컨텍스트는 working-directory 입력을 따른다. 이 값을 무시하고 항상 '.'을
+        # 쓰면 프론트가 하위 디렉터리에 있는 저장소에서 잘못된 컨텍스트로 빌드된다.
+        env:
+          DOCKERFILE_PATH: ${{ inputs.dockerfile-path }}
+          BUILD_CONTEXT: ${{ inputs.working-directory }}
+        run: |
+          docker build "$BUILD_CONTEXT" --file "$DOCKERFILE_PATH" --tag ctf-frontend:test
 
       - name: 비루트-사용자-확인
         run: |
