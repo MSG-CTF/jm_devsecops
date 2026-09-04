@@ -51,6 +51,52 @@ jobs:
             --verbose \
             /repo
 
+      - name: trivy-fs-scan-block-critical-high
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.74.0
+          scan-type: fs
+          scan-ref: ${{ inputs.working-directory }}
+          scanners: vuln
+          severity: CRITICAL,HIGH
+          ignore-unfixed: false
+          exit-code: "1"
+
+      - name: trivy-fs-generate-sarif
+        if: always()
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.74.0
+          scan-type: fs
+          scan-ref: ${{ inputs.working-directory }}
+          scanners: vuln
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          ignore-unfixed: false
+          format: sarif
+          output: trivy-frontend-fs-results.sarif
+          exit-code: "0"
+
+      - name: trivy-fs-upload-sarif
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4
+        with:
+          sarif_file: trivy-frontend-fs-results.sarif
+          category: trivy-frontend-filesystem
+
+  # SAST는 별도 job으로 분리한다. 같은 job에 두면 Semgrep이 실패했을 때
+  # 뒤따르는 Trivy 차단 스텝이 skip되어 SCA 결과를 한 번에 볼 수 없다.
+  # 백엔드 reusable-ci.yml의 security-scan / sast-scan 분리와 같은 구조.
+  sast-scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       # 백엔드 reusable-ci.yml의 Semgrep 스텝과 동일한 도구 버전·판정 로직을 사용.
       # --config만 JS/React 스택에 맞춰 p/javascript, p/react로 지정.
       - name: semgrep-sast-scan
@@ -107,39 +153,6 @@ jobs:
         with:
           sarif_file: semgrep-frontend-results.sarif
           category: semgrep-frontend-sast
-
-      - name: trivy-fs-scan-block-critical-high
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          version: v0.74.0
-          scan-type: fs
-          scan-ref: ${{ inputs.working-directory }}
-          scanners: vuln
-          severity: CRITICAL,HIGH
-          ignore-unfixed: false
-          exit-code: "1"
-
-      - name: trivy-fs-generate-sarif
-        if: always()
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          version: v0.74.0
-          scan-type: fs
-          scan-ref: ${{ inputs.working-directory }}
-          scanners: vuln
-          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
-          ignore-unfixed: false
-          format: sarif
-          output: trivy-frontend-fs-results.sarif
-          exit-code: "0"
-
-      - name: trivy-fs-upload-sarif
-        if: always()
-        continue-on-error: true
-        uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4
-        with:
-          sarif_file: trivy-frontend-fs-results.sarif
-          category: trivy-frontend-filesystem
 
   docker-build-check:
     needs: security-scan
