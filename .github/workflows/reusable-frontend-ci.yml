@@ -191,7 +191,13 @@ jobs:
         run: |
           docker build "$BUILD_CONTEXT" --file "$DOCKERFILE_PATH" --tag ctf-frontend:test
 
+      # 비루트 검사와 이미지 취약점 검사는 서로를 가려서는 안 된다. 앞 스텝이 그대로
+      # 실패하면 뒤 스텝이 skip되어, 개발자가 두 문제를 한 번에 볼 수 없다.
+      # 백엔드 reusable-ci.yml의 "SAST 최종 차단 결과"와 같은 방식으로, 각 검사는
+      # continue-on-error로 결과만 남기고 마지막에 한 번에 판정한다.
       - name: 비루트-사용자-확인
+        id: nonroot
+        continue-on-error: true
         run: |
           container_user="$(docker image inspect ctf-frontend:test --format '{{.Config.User}}')"
           # USER는 "사용자:그룹" 형태도 가능하므로 콜론 앞의 사용자 부분만 비교한다.
@@ -209,6 +215,8 @@ jobs:
       #       배포 구조 확정 시 백엔드 docker-build-check의 curl 확인 스텝처럼 추가.
 
       - name: trivy-이미지-취약점-차단-검사
+        id: image-scan
+        continue-on-error: true
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           version: v0.74.0
@@ -217,6 +225,23 @@ jobs:
           severity: CRITICAL,HIGH
           ignore-unfixed: false
           exit-code: "1"
+
+      - name: 이미지-검사-최종-차단-결과
+        if: always()
+        env:
+          NONROOT_OUTCOME: ${{ steps.nonroot.outcome }}
+          IMAGE_SCAN_OUTCOME: ${{ steps.image-scan.outcome }}
+        run: |
+          failed=0
+          if [ "$NONROOT_OUTCOME" != "success" ]; then
+            echo "비루트 사용자 검사가 통과하지 못했습니다. (결과: ${NONROOT_OUTCOME})"
+            failed=1
+          fi
+          if [ "$IMAGE_SCAN_OUTCOME" != "success" ]; then
+            echo "이미지 취약점·시크릿 검사가 통과하지 못했습니다. (결과: ${IMAGE_SCAN_OUTCOME})"
+            failed=1
+          fi
+          exit "$failed"
 
       - name: trivy-이미지-sarif-생성
         if: always()
