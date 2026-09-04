@@ -1,0 +1,248 @@
+name: frontend-ci-reusable
+
+# workflow_call만 트리거로 둔다 — 이 워크플로우는 이 저장소에서 직접 push/PR로
+# 도는 게 아니라, 다른 저장소(front-team)가 "불러줄 때만" 실행된다.
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: "package.json이 있는 경로 (프론트 저장소 루트 기준)"
+        required: false
+        type: string
+        default: "."
+      dockerfile-path:
+        description: "Dockerfile 경로 (프론트 저장소 루트 기준)"
+        required: false
+        type: string
+        default: "./Dockerfile"
+
+permissions:
+  contents: read
+
+# 같은 브랜치에 연달아 push하면 이전 실행은 취소한다 - 어차피 결과가 무의미하다
+concurrency:
+  group: frontend-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  security-scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: gitleaks-secret-scan
+        # dir이 아닌 git 모드 - 커밋 히스토리까지 스캔해야 지웠다 되살릴 수 있는 시크릿을 잡는다
+        # (위 fetch-depth: 0이 전체 히스토리를 받아오는 이유)
+        # -m 옵션으로 병합 커밋도 각 부모와 개별 diff해서 병합을 통해 들어온 시크릿까지 잡는다
+        run: |
+          docker run --rm \
+            -v "$PWD:/repo" \
+            ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
+            git \
+            --log-opts="--full-history --all --diff-filter=tuxdb -m" \
+            --redact \
+            --verbose \
+            /repo
+
+      # 백엔드 reusable-ci.yml의 Semgrep 스텝과 동일한 도구 버전·판정 로직을 사용.
+      # --config만 JS/React 스택에 맞춰 p/javascript, p/react로 지정.
+      - name: semgrep-sast-scan
+        id: semgrep
+        run: |
+          docker run --rm \
+            --volume "${GITHUB_WORKSPACE}:/src:ro" \
+            --workdir /src \
+            semgrep/semgrep:1.173.0-nonroot@sha256:ae85c429145ef6b29c7a47b4cdec78304f9b325f75ce0ee4a797e841206e3e68 \
+            semgrep scan \
+            --config p/javascript \
+            --config p/react \
+            --oss-only \
+            --metrics=off \
+            --disable-version-check \
+            --sarif . > semgrep-frontend-results.sarif
+
+          error_findings="$(
+            jq '[
+              .runs[] as $run
+              | $run.results[]?
+              | .ruleId as $rule_id
+              | $run.tool.driver.rules[]?
+              | select(
+                  .id == $rule_id
+                  and .defaultConfiguration.level == "error"
+                )
+            ] | length' semgrep-frontend-results.sarif
+          )"
+
+          if [ "$error_findings" -gt 0 ]; then
+            echo "Semgrep ERROR 심각도 발견 ${error_findings}건으로 CI를 실패시킵니다."
+            jq -r '
+              .runs[] as $run
+              | $run.results[]?
+              | . as $result
+              | .ruleId as $rule_id
+              | $run.tool.driver.rules[]?
+              | select(
+                  .id == $rule_id
+                  and .defaultConfiguration.level == "error"
+                )
+              | "- \($rule_id): \($result.locations[0].physicalLocation.artifactLocation.uri):\($result.locations[0].physicalLocation.region.startLine)"
+            ' semgrep-frontend-results.sarif
+            exit 1
+          fi
+
+          echo "Semgrep ERROR 심각도 발견이 없습니다."
+
+      - name: semgrep-upload-sarif
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4
+        with:
+          sarif_file: semgrep-frontend-results.sarif
+          category: semgrep-frontend-sast
+
+      - name: trivy-fs-scan-block-critical-high
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.74.0
+          scan-type: fs
+          scan-ref: ${{ inputs.working-directory }}
+          scanners: vuln
+          severity: CRITICAL,HIGH
+          ignore-unfixed: false
+          exit-code: "1"
+
+      - name: trivy-fs-generate-sarif
+        if: always()
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.74.0
+          scan-type: fs
+          scan-ref: ${{ inputs.working-directory }}
+          scanners: vuln
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          ignore-unfixed: false
+          format: sarif
+          output: trivy-frontend-fs-results.sarif
+          exit-code: "0"
+
+      - name: trivy-fs-upload-sarif
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4
+        with:
+          sarif_file: trivy-frontend-fs-results.sarif
+          category: trivy-frontend-filesystem
+
+  docker-build-check:
+    needs: security-scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: dockerfile-필수-확인
+        run: test -f "${{ inputs.dockerfile-path }}" || { echo "Dockerfile(${{ inputs.dockerfile-path }})이 없습니다."; exit 1; }
+
+      - name: set-up-docker-buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      # front-team 확인 결과: 루트 Dockerfile은 npm ci -> npm run build(Vite)로
+      # dist/를 만들고, 이를 nginx의 /usr/share/nginx/html로 서빙하는 멀티스테이지 빌드.
+      - name: 테스트-이미지-빌드
+        run: docker build . --file "${{ inputs.dockerfile-path }}" --tag ctf-frontend:test
+
+      - name: 비루트-사용자-확인
+        run: |
+          container_user="$(docker image inspect ctf-frontend:test --format '{{.Config.User}}')"
+          # USER는 "사용자:그룹" 형태도 가능하므로 콜론 앞의 사용자 부분만 비교한다.
+          # (이 처리가 없으면 USER 0:0 / root:root 가 root인데도 통과한다)
+          uid_part="${container_user%%:*}"
+          if [ -z "$uid_part" ] || [ "$uid_part" = "0" ] || [ "$uid_part" = "root" ]; then
+            echo "컨테이너가 root 사용자로 실행되도록 설정되어 있습니다. (USER=${container_user:-미지정})"
+            exit 1
+          fi
+
+      # TODO: 컨테이너 기동 후 smoke test — front-team 확인 결과 dist/는
+      #       nginx의 /usr/share/nginx/html로 서빙됨. 다만 배포 타겟(K8s/Compose/기타)과
+      #       /api/v1 프록시 대상(프론트 nginx vs Ingress)이 아직 미확정이라
+      #       front-team 요청대로 지금은 "빌드 검증까지"만 하고 smoke test는 보류.
+      #       배포 구조 확정 시 백엔드 docker-build-check의 curl 확인 스텝처럼 추가.
+
+      - name: trivy-이미지-취약점-차단-검사
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.74.0
+          image-ref: ctf-frontend:test
+          scanners: vuln,secret
+          severity: CRITICAL,HIGH
+          ignore-unfixed: false
+          exit-code: "1"
+
+      - name: trivy-이미지-sarif-생성
+        if: always()
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.74.0
+          image-ref: ctf-frontend:test
+          scanners: vuln,secret
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          ignore-unfixed: false
+          format: sarif
+          output: trivy-frontend-image-results.sarif
+          exit-code: "0"
+
+      - name: trivy-이미지-sarif-업로드
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4
+        with:
+          sarif_file: trivy-frontend-image-results.sarif
+          category: trivy-frontend-image
+
+  build:
+    needs: security-scan
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: setup-node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: ${{ inputs.working-directory }}/package-lock.json
+
+      - name: install-dependencies
+        # lockfile 기준으로 정확히 고정된 버전만 설치
+        run: npm ci
+
+      - name: build
+        run: npm run build
+
+      # TODO: lint — front-team 확인 결과 package.json에 lint 스크립트 없음(ESLint 도입 검토 중).
+      #       도입되면 이 스텝 추가.
+      # TODO: test — front-team 확인 결과 test 스크립트 없음(Vitest 검토 중).
+      #       도입되면 이 스텝 추가.
+      # TODO: deploy/publish artifact — front-team 확인 결과 배포 타겟(K8s/Compose/기타)
+      #       미확정. 라우팅도 "같은 도메인, '/'→프론트, '/api/v1'→백엔드" 방향은 합의됐으나
+      #       프록시를 프론트 nginx가 맡을지 Ingress/게이트웨이가 맡을지는 배포 담당자와
+      #       별도 논의 필요. 확정 전까지 registry push/배포 연결 스텝을 추가하지 않는다.
+      # TODO: front-team 저장소에 이 워크플로우를 호출하는 caller workflow가
+      #       아직 없음. front-team/.github/workflows/ci.yml 생성 필요.
+      #       그 전까지는 이 워크플로우가 존재해도 실행되지 않는다(호출자 없음).
