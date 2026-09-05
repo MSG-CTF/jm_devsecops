@@ -233,10 +233,10 @@ SLA 모니터링은 배포가 끝난 뒤에도 서비스가 계속 정상인지 
 
 ```text
 reusable-backend-build.yml
-정확한 commit → Gitleaks → Docker build → Trivy → Artifact Registry → digest 출력
+정확한 commit → Gitleaks → 인증 전 Docker build → Trivy → Artifact Registry → provenance → digest 출력
 
 reusable-backend-deploy-dev.yml
-GCP 전제조건 → 같은 digest로 migration Job → 개발 Cloud Run → smoke·ZAP → 필요 시 rollback
+GCP 전제조건 → migration Job → traffic 없는 후보 Cloud Run → smoke·ZAP → 100% 전환 → 필요 시 rollback
 ```
 
 GitHub 파일의 정적 준비와 실제 배포 완료는 다르다. 사설 IP의 자체 운영 PostgreSQL·Redis, VPC, Secret Manager, Artifact Registry와 서비스 계정을 준비한 뒤 실제 개발 GCP에서 수동 배포·실패·rollback까지 확인해야 `v3.4.0`을 공개할 수 있다.
@@ -248,9 +248,10 @@ CD를 켜기 전에 다음 준비가 필요하다.
 - GCP Secret Manager의 Django, JWT, PostgreSQL, Redis URL Secret
 - Secret의 `latest`가 아닌 숫자 버전
 - migration을 먼저 실행할 별도 Cloud Run Job과 runtime 서비스 계정
+- 앱용 DB 사용자와 schema 변경용 migration DB 사용자 분리
 - 이미지 게시 계정과 Cloud Run 배포 계정을 분리한 최소 권한 IAM
 - GitHub `development` Environment의 승인 규칙
-- 저장소와 `main`만 허용하는 Workload Identity 조건
+- 저장소, `main`, 정확한 reusable workflow와 `development`를 확인하는 Workload Identity 조건
 - 운영 도메인과 `DJANGO_ALLOWED_HOSTS`
 - 배포 뒤 계속 상태를 확인할 SLA 모니터링
 
@@ -262,10 +263,10 @@ CD를 켜기 전에 다음 준비가 필요하다.
 2. Secret 버전이 `latest`가 아니라 숫자인지 검사한다.
 3. 요청받은 commit만 checkout한다.
 4. Gitleaks로 Git 기록을 다시 검사한다.
-5. Docker 이미지를 commit SHA 태그로 빌드한다.
+5. GCP 인증 파일이 생기기 전에 Docker 이미지를 commit SHA 태그로 빌드한다.
 6. Trivy로 이미지 취약점과 Secret을 검사한다.
 7. 통과한 이미지만 Artifact Registry에 push한다.
-8. push된 이미지의 digest를 구한다.
+8. push된 이미지의 digest와 build provenance를 만들고 다시 검증한다.
 
 commit SHA는 코드의 주민등록번호와 비슷하고, 이미지 digest는 완성된 상자의 지문과 비슷하다. 이름표인 Docker 태그는 움직일 수 있지만 digest가 같으면 내용도 같다.
 
@@ -273,13 +274,14 @@ commit SHA는 코드의 주민등록번호와 비슷하고, 이미지 digest는 
 
 1. GitHub `development` Environment의 승인 규칙을 거친다.
 2. 저장된 장기 GCP 키 대신 Workload Identity Federation으로 인증한다.
-3. Docker 태그가 아니라 검사한 digest로 PostgreSQL·Redis 연결 검사와 migration Job을 먼저 실행한다.
+3. Docker 태그가 아니라 검사하고 provenance를 확인한 digest로 migration Job을 먼저 실행한다.
 4. 일반 설정값은 환경변수로 전달한다.
-5. Django 키, JWT 키, DB 비밀번호와 Redis URL은 Secret Manager의 고정 숫자 버전에서 가져온다.
-6. migration 성공 후 같은 digest를 개발 Cloud Run에 배포한다.
-7. Cloud Run URL의 `/admin/login/`을 한 번 요청한다.
-8. OWASP ZAP passive baseline으로 실행 중인 개발 서비스를 검사하고 보고서를 남긴다.
-9. smoke 또는 High 이상 DAST 발견 시 가능한 경우 직전 정상 revision으로 traffic을 되돌리고 workflow는 실패시킨다.
+5. migration에는 별도 DB 계정과 최소 Secret만 주고, backend에는 앱 DB·Redis·JWT·KOTH Secret을 준다.
+6. migration 성공 후 같은 digest를 traffic 없이 후보 revision으로 배포한다.
+7. 후보 tag URL에서 `/admin/login/`과 대표 API path를 확인한다.
+8. 여러 seed에 OWASP ZAP passive baseline을 실행하고 보고서를 남긴다.
+9. 검사와 보고서 업로드가 모두 성공해야 새 revision에 100% traffic을 전환한다.
+10. 전환 후 공개 URL smoke 실패 때만 직전 정상 revision으로 rollback한다.
 
 백엔드 연결 값과 단계별 절차는 [`docs/backend-cd-github-setup.md`](docs/backend-cd-github-setup.md), 완성된 호출 예제는 [`docs/backend-cd-workflow-example.yml`](docs/backend-cd-workflow-example.yml)을 따른다. 기존 `reusable-cd.yml`은 호환 확인 전까지 남겨 둔 legacy 파일이며 새 연결에는 사용하지 않는다.
 

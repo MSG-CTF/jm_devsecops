@@ -12,19 +12,20 @@
 reusable-backend-build.yml
 └─ 정확한 commit checkout
    → Gitleaks
-   → Docker build 또는 기존 불변 이미지 pull
+   → GCP 인증 전에 Docker build
    → Trivy
    → Artifact Registry push
+   → build provenance 생성·검증
    → image digest 출력
 
 reusable-backend-deploy-dev.yml
 └─ GCP 전제조건 확인
    → 같은 digest로 migration Job 배포·실행
    → migration 성공
-   → 같은 digest로 개발 Cloud Run 배포
-   → smoke test
-   → ZAP passive baseline DAST
-   → 실패 시 가능한 경우 직전 revision으로 rollback
+   → 같은 digest를 traffic 없이 후보 revision으로 배포
+   → 후보 tag URL에서 smoke와 여러 seed의 ZAP passive DAST
+   → 검사와 보고서 업로드가 모두 성공한 뒤 100% traffic 전환
+   → 전환 후 smoke 실패 때만 직전 revision으로 rollback
 ```
 
 이 파일은 GitHub 쪽 배포 절차를 준비한다. 현재 결정에 따라 Cloud SQL과 Memorystore는 만들지 않는다. 사설 IP의 자체 운영 PostgreSQL·Redis, VPC, Artifact Registry, Secret Manager와 서비스 계정은 별도 인프라 작업으로 먼저 준비해야 실제 실행이 성공한다. 데이터 서버의 상세 계획은 [`self-managed-postgres-redis-deployment-plan.md`](self-managed-postgres-redis-deployment-plan.md)를 따른다.
@@ -40,26 +41,31 @@ reusable-backend-deploy-dev.yml
 
 1. 호출한 백엔드 저장소의 정확한 40자리 commit을 checkout한다.
 2. 병합 commit의 각 부모 diff까지 Gitleaks로 다시 검사한다.
-3. WIF의 짧은 수명 access token으로 Artifact Registry에 로그인한다.
-4. `latest` 대신 commit SHA를 image tag로 사용한다.
-5. Artifact Registry immutable tag에 같은 commit image가 있으면 덮어쓰지 않고 기존 image를 pull해 다시 검사한다.
-6. 수정본 유무와 관계없이 HIGH·CRITICAL 이미지 취약점을 차단한다.
-7. 실제 배포에는 tag가 아니라 `image@sha256:digest`를 출력한다.
+3. `.dockerignore`가 `gha-creds-*.json`을 막는지 확인하고 GCP 인증 전에 이미지를 먼저 빌드한다.
+4. WIF의 짧은 수명 access token으로 Artifact Registry에 로그인한다.
+5. `latest` 대신 commit SHA를 image tag로 사용한다.
+6. Artifact Registry immutable tag에 같은 commit image가 있으면 덮어쓰지 않고 기존 image를 pull해 다시 검사한다.
+7. 수정본 유무와 관계없이 HIGH·CRITICAL 이미지 취약점을 차단한다.
+8. 최종 image filesystem에도 GCP 임시 인증 파일이 없는지 확인한다.
+9. 새 image의 GitHub build provenance를 만들고 저장소, source commit, builder workflow와 digest를 검증한다.
+10. 실제 배포에는 tag가 아니라 `image@sha256:digest`를 출력한다.
 
 ## 새 Development Deploy workflow가 보장하는 것
 
 1. image가 지정한 GCP project/repository/image의 digest인지 검사한다.
-2. VPC·subnet과 다섯 개 Secret 숫자 version이 실제로 존재하고 활성 상태인지 확인한다.
+2. VPC·subnet과 여섯 개 Secret 숫자 version이 실제로 존재하고 활성 상태인지 확인한다.
 3. migration Job과 backend service가 서로 다른 최소 권한 runtime 계정을 사용한다.
-4. Direct VPC egress로 사설 IP의 자체 운영 PostgreSQL과 Redis에 접근한다.
-5. 같은 image digest로 PostgreSQL `SELECT 1`, Redis `PING`·임시 저장·조회·삭제를 확인한 뒤 `python manage.py migrate --noinput`을 실행한다.
-6. migration이 실패하면 shell의 non-zero exit로 workflow가 멈춰 backend deploy step이 실행되지 않는다.
-7. migration이 성공한 경우에만 개발 Cloud Run에 같은 digest를 배포한다.
-8. `/admin/login/`을 최대 20번 확인한다.
-9. OWASP ZAP Baseline이 로그인 없이 사이트를 탐색하고 passive 규칙으로 응답을 검사한다.
-10. Medium 이하는 HTML·Markdown·JSON 보고서에 남기고 High 이상은 배포를 실패시킨다.
-11. smoke 또는 DAST 실패 시 이전 100% traffic revision이 있으면 그 revision으로 traffic을 되돌린다.
-12. rollback에 성공해도 새 배포 workflow는 실패로 남겨 사람이 원인을 조사하게 한다.
+4. migration 전용 DB 사용자와 앱 전용 DB 사용자를 다르게 강제한다.
+5. migration Job에는 migration DB 비밀번호만 Secret으로 주고, Django가 설정을 읽는 데 필요한 비서명용 placeholder만 일반 환경변수로 준다. 실제 Django·JWT 키는 backend에만 연결한다.
+6. Direct VPC egress로 사설 IP의 자체 운영 PostgreSQL과 Redis에 접근한다.
+7. 같은 image digest와 migration 사용자로 PostgreSQL `SELECT 1` 후 `python manage.py migrate --noinput`을 실행한다.
+8. migration이 실패하면 workflow가 멈춰 backend deploy step이 실행되지 않는다.
+9. migration 성공 후 새 revision을 `--no-traffic`과 후보 tag로 배포한다.
+10. 후보 tag URL에서 `/admin/login/`을 확인하고, 존재하지 않는 사용자 로그인 요청이 401인지 확인해 실제 backend runtime의 Redis throttle과 PostgreSQL 조회를 함께 검사한다.
+11. 실제 사용자 URL이 아닌 후보 tag URL에서 최소 두 DAST seed를 검사한다.
+12. ZAP 보고서 업로드까지 성공한 경우에만 새 revision으로 traffic 100%를 전환한다.
+13. 전환 뒤 공개 URL smoke가 실패할 때만 직전 100% revision으로 되돌린다.
+14. rollback에 성공해도 새 배포 workflow는 실패로 남겨 사람이 원인을 조사하게 한다.
 
 Baseline 검사는 SQL injection 같은 공격 요청을 적극적으로 보내는 active scan이 아니다. 공용 개발환경의 응답을 안전하게 관찰하는 1단계 DAST다. 인증 DAST와 active API scan은 전용 계정, 삭제 가능한 데이터, 검사 범위를 합의한 뒤 별도 버전에서 추가한다.
 
@@ -88,13 +94,16 @@ Baseline 검사는 SQL injection 같은 공격 요청을 적극적으로 보내�
 | `DEV_DJANGO_ALLOWED_HOSTS` | scheme/path가 없는 정확한 Cloud Run host 목록 |
 | `DEV_POSTGRES_DB` | `msg_backend` |
 | `DEV_POSTGRES_USER` | `msg_app` |
+| `DEV_MIGRATION_POSTGRES_USER` | schema 변경만 허용할 별도 사용자. 예: `msg_migrator` |
 | `DEV_POSTGRES_HOST` | 자체 운영 PostgreSQL의 고정 사설 IP 또는 내부 DNS |
 | `DEV_REDIS_SECRET_VERSION` | `redis-url-dev`의 숫자 version |
 | `DEV_SCHEDULER_BASE_URL` | 경로가 없는 실제 개발 Scheduler origin |
 | `DEV_DJANGO_SECRET_VERSION` | `django-secret-key-dev`의 숫자 version |
 | `DEV_JWT_SECRET_VERSION` | `jwt-secret-dev`의 숫자 version |
 | `DEV_POSTGRES_PASSWORD_SECRET_VERSION` | `postgres-password-dev`의 숫자 version |
+| `DEV_MIGRATION_POSTGRES_PASSWORD_SECRET_VERSION` | `migration-postgres-password-dev`의 숫자 version |
 | `DEV_KOTH_SECRET_VERSION` | `koth-team-token-secret-dev`의 숫자 version |
+| `DEV_DAST_SEED_PATHS_JSON` | 실제 존재하는 path JSON 배열. 예: `["/admin/login/","/api/v1/timer"]` |
 
 `DEV_DJANGO_ALLOWED_HOSTS` 예시는 다음과 같다. `https://`와 path를 넣지 않는다.
 
@@ -119,6 +128,7 @@ https://msg-scheduler-dev-269174025178.asia-northeast3.run.app
 - Django secret key
 - JWT signing key
 - PostgreSQL password
+- migration PostgreSQL password
 - 인증정보를 포함한 Redis URL
 - KOTH team token secret
 
@@ -246,7 +256,7 @@ GitHub 계정은 프로젝트 Owner가 아니어야 하고 이미지 게시와 �
 
 그 뒤 reusable deploy workflow는 공개 IAM을 변경하지 않고 기존 service와 Job의 revision만 갱신한다. 이렇게 하면 workflow가 프로젝트의 기존 `ctf-backend`나 나중에 만들 다른 서비스까지 변경하지 못한다.
 
-WIF 조건도 저장소 이름만 확인하면 부족하다. 검증 중에는 중앙 후보의 정확한 commit SHA를, 공개 후에는 아래 두 `job_workflow_ref`와 백엔드 `main`을 함께 허용한다.
+WIF 조건도 저장소 이름만 확인하면 부족하다. 검증 중에는 중앙 후보의 정확한 commit SHA를, 공개 후에는 아래 두 `job_workflow_ref`와 백엔드 `main`을 함께 허용한다. deploy 쪽에는 GitHub Environment가 정확히 `development`라는 조건도 추가한다.
 
 ```text
 MSG-CTF/jm_devsecops/.github/workflows/reusable-backend-build.yml@refs/tags/v3.4.0
@@ -254,6 +264,15 @@ MSG-CTF/jm_devsecops/.github/workflows/reusable-backend-deploy-dev.yml@refs/tags
 ```
 
 즉, `MSG-CTF/msg-backend` 안의 다른 workflow가 OIDC token을 요청해도 위 중앙 workflow를 통해 실행되지 않았다면 GCP 계정을 사용할 수 없어야 한다.
+
+Build와 Deploy workflow 파일은 계속 분리한다. Build는 image를 만들고 Registry에 쓰는 권한만 필요하지만, Deploy는 DB migration과 Cloud Run traffic을 바꾸는 더 강한 권한 및 `development` 승인이 필요하기 때문이다. 한 파일에 합치면 작은 image build 변경도 배포 권한 문맥 안에서 실행되어 사고 범위가 커지고, build만 재실행하기도 어려워진다.
+
+하지만 WIF provider 자체는 반드시 두 개일 필요가 없다. provider 하나를 쓴다면 다음 두 조건을 모두 만족해야 안전하다.
+
+1. provider가 `repository=MSG-CTF/msg-backend`, `ref=refs/heads/main`, 정확한 `job_workflow_ref`를 확인하고 deploy일 때 `environment=development`도 확인한다.
+2. publisher 서비스 계정의 `roles/iam.workloadIdentityUser`는 build workflow 주체에만, deployer 서비스 계정의 같은 역할은 deploy workflow 주체에만 연결한다. 저장소 전체 principalSet을 두 계정에 똑같이 연결하면 분리한 의미가 없다.
+
+이를 쉽게 구성하려면 WIF에 `attribute.workflow_kind`를 추가해 정확한 build workflow는 `build`, 정확한 deploy workflow는 `deploy-development`로 매핑하고, 각 서비스 계정 IAM을 해당 값에 따로 묶는다. 구조를 이해하기 어려운 초기 운영 단계라면 provider도 build/deploy 두 개로 나누는 편이 설정 실수를 눈으로 찾기 쉽다. 보안 수준은 provider 개수보다 **조건과 서비스 계정 impersonation binding이 분리됐는지**로 결정된다.
 
 현재 기존 `github-actions-deployer`의 `roles/run.admin`과 repo-only WIF 조건은 새 개발 계정이 정상 작동한 뒤 축소하거나 제거한다.
 
@@ -269,7 +288,9 @@ GitHub 파일이 존재하는 것만으로 CD 완료가 아니다. 다음 조건
 - Cloud Run revision이 build가 출력한 digest 사용
 - `/admin/login/` smoke 성공
 - ZAP 보고서 artifact 생성, High 이상 발견 시 workflow 실패
-- 잘못된 revision에서 직전 revision rollback 성공
+- 후보 검사 전 기존 traffic이 그대로 유지됨
+- 모든 검사 뒤 새 revision으로 100% traffic이 전환됨
+- 전환 후 공개 URL 실패에서 직전 revision rollback 성공
 - GitHub log에 실제 Secret 값이 없음
 - 중앙 검증 commit과 `v3.4.0` 태그가 일치
 

@@ -56,6 +56,7 @@ jobs:
   build-scan-push:
     runs-on: ubuntu-latest
     permissions:
+      attestations: write
       contents: read
       id-token: write
       security-events: write
@@ -69,6 +70,7 @@ jobs:
       REGION: ${{ inputs.region }}
       ARTIFACT_REPOSITORY: ${{ inputs.artifact_repository }}
       IMAGE_NAME: ${{ inputs.image_name }}
+      PUBLISHER_SERVICE_ACCOUNT: ${{ inputs.publisher_service_account }}
     steps:
       - name: Build 입력값 확인
         shell: bash
@@ -93,6 +95,11 @@ jobs:
               exit 1
             }
           done
+          expected_publisher="github-backend-publisher-dev@${PROJECT_ID}.iam.gserviceaccount.com"
+          test "$PUBLISHER_SERVICE_ACCOUNT" = "$expected_publisher" || {
+            echo "publisher_service_account는 승인된 개발 image publisher여야 합니다."
+            exit 1
+          }
 
       - name: 호출 저장소의 정확한 commit checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -102,6 +109,19 @@ jobs:
 
       - name: 루트 Dockerfile 확인
         run: test -f Dockerfile || { echo "저장소 루트에 Dockerfile이 없습니다."; exit 1; }
+
+      - name: GCP 임시 인증 파일 Docker 제외 확인
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f .dockerignore || {
+            echo ".dockerignore가 없습니다."
+            exit 1
+          }
+          grep -Fxq 'gha-creds-*.json' .dockerignore || {
+            echo ".dockerignore에 gha-creds-*.json을 추가해야 합니다."
+            exit 1
+          }
 
       - name: 병합 commit을 포함한 Gitleaks 검사
         run: |
@@ -113,6 +133,29 @@ jobs:
             --redact \
             --verbose \
             /repo
+
+      - name: 이미지 주소 설정
+        id: image
+        shell: bash
+        run: |
+          set -euo pipefail
+          image_uri="${REGION}-docker.pkg.dev/${PROJECT_ID}/${ARTIFACT_REPOSITORY}/${IMAGE_NAME}"
+          echo "image_uri=${image_uri}" >> "$GITHUB_OUTPUT"
+          echo "image_tag=${image_uri}:${COMMIT_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Docker Buildx 설정
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: GCP 인증 전에 새 이미지 빌드
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: ./Dockerfile
+          load: true
+          push: false
+          tags: ${{ steps.image.outputs.image_tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: GCP WIF 인증
         id: auth
@@ -151,15 +194,6 @@ jobs:
           username: oauth2accesstoken
           password: ${{ steps.auth.outputs.access_token }}
 
-      - name: 이미지 주소 설정
-        id: image
-        shell: bash
-        run: |
-          set -euo pipefail
-          image_uri="${REGION}-docker.pkg.dev/${PROJECT_ID}/${ARTIFACT_REPOSITORY}/${IMAGE_NAME}"
-          echo "image_uri=${image_uri}" >> "$GITHUB_OUTPUT"
-          echo "image_tag=${image_uri}:${COMMIT_SHA}" >> "$GITHUB_OUTPUT"
-
       - name: 동일 commit 이미지 존재 여부 확인
         id: existing
         env:
@@ -169,32 +203,30 @@ jobs:
           set -euo pipefail
           if docker buildx imagetools inspect "$IMAGE_TAG" >/dev/null 2>&1; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "이미 존재하는 불변 commit SHA 이미지를 다시 검사해 사용합니다."
+            echo "기존 불변 commit SHA 이미지는 provenance 검증 후에만 사용합니다."
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
-
-      - name: Docker Buildx 설정
-        if: steps.existing.outputs.exists != 'true'
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
-
-      - name: 새 이미지 빌드
-        if: steps.existing.outputs.exists != 'true'
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
-        with:
-          context: .
-          file: ./Dockerfile
-          load: true
-          push: false
-          tags: ${{ steps.image.outputs.image_tag }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
       - name: 기존 불변 이미지 pull
         if: steps.existing.outputs.exists == 'true'
         env:
           IMAGE_TAG: ${{ steps.image.outputs.image_tag }}
         run: docker pull "$IMAGE_TAG"
+
+      - name: 최종 이미지에 GCP 인증 파일이 없는지 확인
+        env:
+          IMAGE_TAG: ${{ steps.image.outputs.image_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          container_id="$(docker create "$IMAGE_TAG")"
+          trap 'docker rm -f "$container_id" >/dev/null 2>&1 || true' EXIT
+          if docker export "$container_id" | tar -tf - | \
+            grep -E '(^|/)gha-creds-[^/]*\.json$'; then
+            echo "GCP 임시 인증 파일이 이미지에 포함되어 있습니다."
+            exit 1
+          fi
 
       - name: Trivy HIGH·CRITICAL 이미지 취약점/시크릿 차단
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
@@ -251,3 +283,25 @@ jobs:
           }
           echo "image_digest=${digest}" >> "$GITHUB_OUTPUT"
           echo "image_ref=${IMAGE_URI}@${digest}" >> "$GITHUB_OUTPUT"
+
+      - name: 새 이미지 Build provenance 생성
+        if: steps.existing.outputs.exists != 'true'
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-name: ${{ steps.image.outputs.image_uri }}
+          subject-digest: ${{ steps.digest.outputs.image_digest }}
+
+      - name: Build provenance와 source commit 검증
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_REF: ${{ steps.digest.outputs.image_ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh attestation verify "oci://${IMAGE_REF}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow \
+              "MSG-CTF/jm_devsecops/.github/workflows/reusable-backend-build.yml" \
+            --source-digest "$COMMIT_SHA" \
+            --source-ref "refs/heads/main" \
+            --deny-self-hosted-runners

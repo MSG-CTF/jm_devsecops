@@ -39,6 +39,7 @@ jobs:
        (inputs.action == 'build' || inputs.action == 'deploy'))
     needs: ci
     permissions:
+      attestations: write
       contents: read
       id-token: write
       security-events: write
@@ -58,6 +59,7 @@ jobs:
       (github.event_name == 'workflow_dispatch' && inputs.action == 'deploy')
     needs: build
     permissions:
+      attestations: read
       contents: read
       id-token: write
     uses: MSG-CTF/jm_devsecops/.github/workflows/reusable-backend-deploy-dev.yml@v3.4.0
@@ -70,7 +72,6 @@ jobs:
       image_ref: ${{ needs.build.outputs.image_ref }}
       cloud_run_service: ${{ vars.DEV_BACKEND_SERVICE }}
       migration_job: ${{ vars.DEV_MIGRATION_JOB }}
-      deployment_environment: development
       backend_runtime_service_account: ${{ vars.DEV_BACKEND_RUNTIME_SERVICE_ACCOUNT }}
       migration_runtime_service_account: ${{ vars.DEV_MIGRATION_RUNTIME_SERVICE_ACCOUNT }}
       vpc_network: ${{ vars.DEV_VPC_NETWORK }}
@@ -81,6 +82,7 @@ jobs:
       django_allowed_hosts: ${{ vars.DEV_DJANGO_ALLOWED_HOSTS }}
       postgres_db: ${{ vars.DEV_POSTGRES_DB }}
       postgres_user: ${{ vars.DEV_POSTGRES_USER }}
+      migration_postgres_user: ${{ vars.DEV_MIGRATION_POSTGRES_USER }}
       postgres_host: ${{ vars.DEV_POSTGRES_HOST }}
       postgres_port: "5432"
       scheduler_base_url: ${{ vars.DEV_SCHEDULER_BASE_URL }}
@@ -90,10 +92,11 @@ jobs:
       jwt_secret_version: ${{ vars.DEV_JWT_SECRET_VERSION }}
       postgres_password_secret_id: postgres-password-dev
       postgres_password_secret_version: ${{ vars.DEV_POSTGRES_PASSWORD_SECRET_VERSION }}
+      migration_postgres_password_secret_id: migration-postgres-password-dev
+      migration_postgres_password_secret_version: ${{ vars.DEV_MIGRATION_POSTGRES_PASSWORD_SECRET_VERSION }}
       redis_secret_id: redis-url-dev
       redis_secret_version: ${{ vars.DEV_REDIS_SECRET_VERSION }}
       koth_secret_id: koth-team-token-secret-dev
       koth_secret_version: ${{ vars.DEV_KOTH_SECRET_VERSION }}
       smoke_test_path: /admin/login/
-      rollback_on_smoke_failure: true
-      run_dast: true
+      dast_seed_paths_json: ${{ vars.DEV_DAST_SEED_PATHS_JSON }}

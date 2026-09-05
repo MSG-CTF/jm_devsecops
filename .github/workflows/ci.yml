@@ -14,6 +14,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  workflow-lint:
+    name: actionlint and ShellCheck
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: 중앙 저장소 checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: 고정 commit의 actionlint 설치
+        env:
+          ACTIONLINT_COMMIT: 914e7df21a07ef503a81201c76d2b11c789d3fca # v1.7.12
+        run: go install "github.com/rhysd/actionlint/cmd/actionlint@${ACTIONLINT_COMMIT}"
+
+      - name: workflow YAML과 내장 shell 검사
+        run: |
+          shellcheck --version
+          "$(go env GOPATH)/bin/actionlint" -color
+
   ci:
     uses: ./.github/workflows/reusable-ci.yml
     with:
