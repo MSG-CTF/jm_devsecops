@@ -300,13 +300,13 @@ jobs:
             echo "scheduler_base_url은 경로가 없는 http/https origin이어야 합니다."
             exit 1
           }
-          [[ "$SMOKE_TEST_PATH" == /* ]] &&
-            [[ "$SMOKE_TEST_PATH" != *"?"* ]] &&
-            [[ "$SMOKE_TEST_PATH" != *"#"* ]] &&
-            [[ ! "$SMOKE_TEST_PATH" =~ [[:space:]] ]] || {
+          if [[ "$SMOKE_TEST_PATH" != /* ||
+                "$SMOKE_TEST_PATH" == *"?"* ||
+                "$SMOKE_TEST_PATH" == *"#"* ||
+                "$SMOKE_TEST_PATH" =~ [[:space:]] ]]; then
             echo "smoke_test_path는 query, fragment, 공백이 없는 상대 path여야 합니다."
             exit 1
-          }
+          fi
           jq -e '
             type == "array" and
             length >= 2 and
