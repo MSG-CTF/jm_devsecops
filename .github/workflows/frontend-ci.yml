@@ -1,0 +1,339 @@
+name: Reusable Frontend CI
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: package.json이 있는 호출 저장소 내부 경로
+        required: false
+        default: .
+        type: string
+      dockerfile-path:
+        description: working-directory 기준 Dockerfile 경로
+        required: false
+        default: ./Dockerfile
+        type: string
+      node-version:
+        description: npm build에 사용할 정확한 Node.js 버전
+        required: false
+        default: "20.19.5"
+        type: string
+      container-port:
+        description: 완성된 Nginx 컨테이너가 CI에서 수신할 port
+        required: false
+        default: 80
+        type: number
+
+permissions:
+  contents: read
+
+jobs:
+  contract-check:
+    name: frontend contract
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: 호출 저장소 checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: 입력과 필수 파일 확인
+        env:
+          WORKING_DIRECTORY: ${{ inputs.working-directory }}
+          DOCKERFILE_PATH: ${{ inputs.dockerfile-path }}
+          CONTAINER_PORT: ${{ inputs.container-port }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for path in "$WORKING_DIRECTORY" "$DOCKERFILE_PATH"; do
+            [[ "$path" != /* && "$path" != *".."* ]] || {
+              echo "경로는 저장소 내부 상대경로여야 합니다: $path"
+              exit 1
+            }
+          done
+          if [[ ! "$CONTAINER_PORT" =~ ^[0-9]+$ ]] ||
+             ((CONTAINER_PORT < 1 || CONTAINER_PORT > 65535)); then
+            echo "container-port는 1~65535여야 합니다."
+            exit 1
+          fi
+          test -f "$WORKING_DIRECTORY/package.json" || {
+            echo "package.json이 없습니다."
+            exit 1
+          }
+          test -f "$WORKING_DIRECTORY/package-lock.json" || {
+            echo "재현 가능한 npm ci를 위한 package-lock.json이 없습니다."
+            exit 1
+          }
+          test -f "$WORKING_DIRECTORY/$DOCKERFILE_PATH" || {
+            echo "Dockerfile이 없습니다."
+            exit 1
+          }
+
+  security-scan:
+    name: frontend secrets and SCA
+    needs: contract-check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: 호출 저장소 전체 기록 checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: 병합 commit을 포함한 Gitleaks 검사
+        run: |
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/repo" \
+            ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
+            git \
+            --log-opts="--full-history --all --diff-filter=tuxdb -m" \
+            --redact \
+            --verbose \
+            /repo
+
+      - name: Trivy frontend filesystem HIGH·CRITICAL 차단
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.74.0
+          scan-type: fs
+          scan-ref: ${{ inputs.working-directory }}
+          scanners: vuln
+          severity: CRITICAL,HIGH
+          ignore-unfixed: false
+          exit-code: "1"
+
+      - name: Trivy 전체 filesystem SARIF 생성
+        if: always()
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.74.0
+          scan-type: fs
+          scan-ref: ${{ inputs.working-directory }}
+          scanners: vuln
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          ignore-unfixed: false
+          format: sarif
+          output: trivy-frontend-fs.sarif
+          exit-code: "0"
+
+      - name: Trivy filesystem SARIF 업로드
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4
+        with:
+          sarif_file: trivy-frontend-fs.sarif
+          category: trivy-frontend-filesystem
+
+  sast-sca:
+    name: frontend SAST and npm audit
+    needs: contract-check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: 호출 저장소 checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Semgrep JavaScript·React SAST
+        id: semgrep
+        continue-on-error: true
+        env:
+          WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_path="${GITHUB_WORKSPACE}/${WORKING_DIRECTORY#./}"
+          docker run --rm \
+            --volume "${source_path}:/src:ro" \
+            --workdir /src \
+            semgrep/semgrep:1.173.0-nonroot@sha256:ae85c429145ef6b29c7a47b4cdec78304f9b325f75ce0ee4a797e841206e3e68 \
+            semgrep scan \
+            --config p/default \
+            --oss-only \
+            --metrics=off \
+            --disable-version-check \
+            --sarif . > semgrep-frontend.sarif
+
+          error_findings="$(jq '[
+            .runs[] as $run
+            | $run.results[]?
+            | .ruleId as $rule_id
+            | $run.tool.driver.rules[]?
+            | select(.id == $rule_id and .defaultConfiguration.level == "error")
+          ] | length' semgrep-frontend.sarif)"
+          echo "Semgrep ERROR 발견 수: ${error_findings}"
+          test "$error_findings" -eq 0
+
+      - name: Semgrep SARIF 업로드
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4
+        with:
+          sarif_file: semgrep-frontend.sarif
+          category: semgrep-frontend
+
+      - name: 고정 Node.js 설정
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+          cache-dependency-path: ${{ inputs.working-directory }}/package-lock.json
+
+      - name: npm 의존성 HIGH·CRITICAL 차단 및 보고서 생성
+        id: npm-audit
+        continue-on-error: true
+        working-directory: ${{ inputs.working-directory }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          audit_exit=0
+          npm audit --audit-level=high --json \
+            > "$RUNNER_TEMP/npm-audit-frontend.json" || audit_exit="$?"
+          if [[ "$audit_exit" -gt 1 ]]; then
+            echo "npm audit 실행 자체가 실패했습니다: exit=${audit_exit}"
+            exit "$audit_exit"
+          fi
+          if jq -e 'has("error")' "$RUNNER_TEMP/npm-audit-frontend.json" >/dev/null; then
+            echo "npm audit가 정상적인 취약점 보고서를 만들지 못했습니다."
+            jq '.error' "$RUNNER_TEMP/npm-audit-frontend.json"
+            exit 1
+          fi
+          high="$(jq '.metadata.vulnerabilities.high // 0' \
+            "$RUNNER_TEMP/npm-audit-frontend.json")"
+          critical="$(jq '.metadata.vulnerabilities.critical // 0' \
+            "$RUNNER_TEMP/npm-audit-frontend.json")"
+          echo "npm audit HIGH=${high}, CRITICAL=${critical}"
+          test "$high" -eq 0 && test "$critical" -eq 0
+
+      - name: npm audit 보고서 업로드
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: npm-audit-frontend-${{ github.run_id }}
+          path: ${{ runner.temp }}/npm-audit-frontend.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: SAST·SCA 최종 판정
+        if: always()
+        env:
+          SEMGREP_OUTCOME: ${{ steps.semgrep.outcome }}
+          NPM_AUDIT_OUTCOME: ${{ steps.npm-audit.outcome }}
+        run: |
+          test "$SEMGREP_OUTCOME" = "success" || {
+            echo "Semgrep 검사가 실패했습니다."
+            exit 1
+          }
+          test "$NPM_AUDIT_OUTCOME" = "success" || {
+            echo "npm audit HIGH·CRITICAL 검사가 실패했습니다."
+            exit 1
+          }
+
+  build-container:
+    name: frontend build and container
+    needs: contract-check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    env:
+      FRONTEND_TEST_IMAGE: msg-frontend:test
+    steps:
+      - name: 호출 저장소 checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: 고정 Node.js 설정
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+          cache-dependency-path: ${{ inputs.working-directory }}/package-lock.json
+
+      - name: lockfile 그대로 설치하고 Vite build
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          npm ci
+          npm run build
+
+      - name: Docker Buildx 설정
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: frontend image 빌드
+        env:
+          WORKING_DIRECTORY: ${{ inputs.working-directory }}
+          DOCKERFILE_PATH: ${{ inputs.dockerfile-path }}
+        run: >-
+          docker build "$WORKING_DIRECTORY"
+          --file "$WORKING_DIRECTORY/$DOCKERFILE_PATH"
+          --tag "$FRONTEND_TEST_IMAGE"
+
+      - name: runtime 컨테이너 비루트 확인
+        run: |
+          container_user="$(docker image inspect "$FRONTEND_TEST_IMAGE" \
+            --format '{{.Config.User}}')"
+          if [[ -z "$container_user" || "$container_user" == "0" ||
+                "$container_user" == "root" ]]; then
+            echo "프론트 runtime 컨테이너가 root로 실행됩니다."
+            exit 1
+          fi
+
+      - name: Nginx 컨테이너 시작·정적 페이지 확인
+        env:
+          CONTAINER_PORT: ${{ inputs.container-port }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --detach --name msg-frontend-ci \
+            --publish "127.0.0.1:18081:${CONTAINER_PORT}" \
+            --env PORT="$CONTAINER_PORT" \
+            --env BACKEND_URL=https://example.com \
+            "$FRONTEND_TEST_IMAGE"
+          for attempt in {1..20}; do
+            if curl --fail --silent --show-error --output /dev/null \
+              http://127.0.0.1:18081/; then
+              exit 0
+            fi
+            echo "frontend 시작 확인 재시도: ${attempt}/20"
+            sleep 2
+          done
+          docker logs msg-frontend-ci
+          exit 1
+
+      - name: 테스트 컨테이너 정리
+        if: always()
+        run: docker rm --force msg-frontend-ci 2>/dev/null || true
+
+      - name: Trivy frontend image HIGH·CRITICAL·Secret 차단
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.74.0
+          image-ref: msg-frontend:test
+          scanners: vuln,secret
+          severity: CRITICAL,HIGH
+          ignore-unfixed: false
+          exit-code: "1"
+
+      - name: Trivy frontend image 전체 SARIF 생성
+        if: always()
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.74.0
+          image-ref: msg-frontend:test
+          scanners: vuln,secret
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          ignore-unfixed: false
+          format: sarif
+          output: trivy-frontend-image.sarif
+          exit-code: "0"
+
+      - name: Trivy frontend image SARIF 업로드
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4
+        with:
+          sarif_file: trivy-frontend-image.sarif
+          category: trivy-frontend-image

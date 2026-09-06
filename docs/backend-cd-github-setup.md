@@ -61,7 +61,7 @@ reusable-backend-deploy-dev.yml
 7. 같은 image digest와 migration 사용자로 PostgreSQL `SELECT 1` 후 `python manage.py migrate --noinput`을 실행한다.
 8. migration이 실패하면 workflow가 멈춰 backend deploy step이 실행되지 않는다.
 9. migration 성공 후 새 revision을 `--no-traffic`과 후보 tag로 배포한다.
-10. 후보 tag URL에서 `/admin/login/`을 확인하고, 존재하지 않는 사용자 로그인 요청이 401인지 확인해 실제 backend runtime의 Redis throttle과 PostgreSQL 조회를 함께 검사한다.
+10. 후보 tag URL에서 `/admin/login/`을 확인한다. 고유한 가짜 사용자로 처음 10번은 401, 11번째는 429인지 확인해 PostgreSQL 사용자 조회와 실제 Redis `10/min` throttle을 함께 검사한다. Redis 장애 때 throttle이 fail-open되는 현재 백엔드 구현에서는 한 번의 401만으로 Redis 정상을 판정할 수 없기 때문이다.
 11. 실제 사용자 URL이 아닌 후보 tag URL에서 최소 두 DAST seed를 검사한다.
 12. ZAP 보고서 업로드까지 성공한 경우에만 새 revision으로 traffic 100%를 전환한다.
 13. 전환 뒤 공개 URL smoke가 실패할 때만 직전 100% revision으로 되돌린다.

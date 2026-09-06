@@ -581,17 +581,35 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          login_id="__cd_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}__"
+          request_body="$(jq -nc --arg login_id "$login_id" \
+            '{login_id: $login_id, password: "not-a-real-password"}')"
+
+          for attempt in {1..10}; do
+            status="$(curl --silent --show-error --output /dev/null \
+              --write-out '%{http_code}' \
+              --request POST \
+              --header 'Content-Type: application/json' \
+              --data "$request_body" \
+              "${SERVICE_URL%/}/api/v1/auth/login")"
+            test "$status" = "401" || {
+              echo "${attempt}번째 로그인 실패 요청이 예상한 401이 아닙니다: HTTP ${status}"
+              exit 1
+            }
+          done
+
           status="$(curl --silent --show-error --output /dev/null \
             --write-out '%{http_code}' \
             --request POST \
             --header 'Content-Type: application/json' \
-            --data '{"login_id":"__cd_nonexistent_user__","password":"not-a-real-password"}' \
+            --data "$request_body" \
             "${SERVICE_URL%/}/api/v1/auth/login")"
-          test "$status" = "401" || {
-            echo "로그인 경로가 예상한 401을 반환하지 않았습니다: HTTP ${status}"
-            echo "이 검사는 Redis throttle과 PostgreSQL 사용자 조회를 함께 통과해야 성공합니다."
+          test "$status" = "429" || {
+            echo "11번째 요청이 429가 아닙니다: HTTP ${status}"
+            echo "PostgreSQL 조회 또는 Redis 기반 로그인 throttle을 확인하세요."
             exit 1
           }
+          echo "PostgreSQL 사용자 조회와 Redis 10/min throttle이 모두 확인됐습니다."
 
       - name: DAST seed path 접근·coverage 확인
         id: dast-coverage
