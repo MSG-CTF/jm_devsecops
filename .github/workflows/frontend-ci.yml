@@ -151,7 +151,8 @@ jobs:
             --workdir /src \
             semgrep/semgrep:1.173.0-nonroot@sha256:ae85c429145ef6b29c7a47b4cdec78304f9b325f75ce0ee4a797e841206e3e68 \
             semgrep scan \
-            --config p/default \
+            --config p/javascript \
+            --config p/react \
             --oss-only \
             --metrics=off \
             --disable-version-check \
