@@ -207,7 +207,7 @@ jobs:
       enforce_black: true
 ```
 
-다음 조건을 모두 확인하기 전에는 deploy job을 추가하지 않는다.
+다음 조건을 모두 확인하기 전에는 deploy job을 활성화하지 않는다.
 
 - Cloud SQL 인스턴스와 데이터베이스가 준비됨
 - Cloud Run에서 Cloud SQL로 연결할 방법이 준비됨
@@ -215,60 +215,34 @@ jobs:
 - `django-secret-key`, `jwt-secret`, `postgres-password`가 Secret Manager에 존재함
 - 각 Secret의 `latest`가 아닌 숫자 버전을 정함
 - 운영 migration을 Cloud Run Job 등으로 먼저 적용하는 절차가 준비됨
-- GitHub `production` Environment에 승인 규칙을 설정함
-- Workload Identity 조건이 `MSG-CTF/msg-backend`, `main` ref와 중앙 `reusable-cd.yml@v3.3.1` 호출만 허용함
+- Artifact Registry Docker 저장소가 준비됨
+- backend와 migration용 runtime 서비스 계정을 분리함
+- GitHub `development` Environment에 승인 규칙을 설정함
+- Workload Identity 조건이 `MSG-CTF/msg-backend`의 `main` ref만 허용함
 - Cloud Run URL 또는 운영 도메인을 `DJANGO_ALLOWED_HOSTS`에 넣음
 - 별도 SLA 모니터링의 대상 주소, 주기, 알림 받을 사람을 정함
 
-## 4단계: CD를 나중에 켜는 방법
+## 4단계: 새 개발 CD를 안전하게 연결하는 방법
 
-위 준비가 끝나면 백엔드 호출 파일의 최상위 권한에 `id-token: write`를 추가하고 다음 job을 붙인다.
+기존 `reusable-cd.yml@v3.3.1`은 Docker Hub 직행 방식의 legacy 골격이므로 새 백엔드 CD에 사용하지 않는다. 새 후보는 두 단계다.
 
-```yaml
-  deploy:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: ci
-    uses: MSG-CTF/jm_devsecops/.github/workflows/reusable-cd.yml@v3.3.1
-    with:
-      commit_sha: ${{ github.sha }}
-      dockerhub_username: ${{ vars.DOCKERHUB_USERNAME }}
-      image_name: ctf-backend
-      cloud_run_service: ctf-backend
-      region: asia-northeast3
-      deployment_environment: production
-      django_allowed_hosts: ${{ vars.DJANGO_ALLOWED_HOSTS }}
-      smoke_test_path: /admin/login/
-      postgres_db: ${{ vars.POSTGRES_DB }}
-      postgres_user: ${{ vars.POSTGRES_USER }}
-      postgres_host: ${{ vars.POSTGRES_HOST }}
-      postgres_port: "5432"
-      redis_url: ${{ vars.REDIS_URL }}
-      django_secret_version: ${{ vars.DJANGO_SECRET_VERSION }}
-      jwt_secret_version: ${{ vars.JWT_SECRET_VERSION }}
-      postgres_password_secret_version: ${{ vars.POSTGRES_PASSWORD_SECRET_VERSION }}
-    secrets:
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-      GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-```
+1. `reusable-backend-build.yml`: 정확한 commit을 검사하고 Artifact Registry에 올려 digest를 출력한다.
+2. `reusable-backend-deploy-dev.yml`: 같은 digest로 migration Job을 실행하고, 성공한 경우에만 개발 Cloud Run에 배포한다.
 
-`secrets: inherit`는 사용하지 않는다. 필요한 Secret 세 개만 명시적으로 전달한다.
+완성된 백엔드 호출 파일은 `docs/backend-cd-workflow-example.yml`에 있다. 필요한 Repository Variables, GitHub `development` Environment, WIF 조건과 실제 검증 순서는 `docs/backend-cd-github-setup.md`를 따른다.
 
-CD는 다음 순서로 동작한다.
+중요한 순서는 다음과 같다.
 
-1. 배포할 commit SHA와 Secret 버전 번호를 검증한다.
-2. Gitleaks를 다시 실행한다.
-3. 이미지를 commit SHA 태그로 빌드한다.
-4. Trivy를 통과한 이미지만 Docker Hub에 push한다.
-5. push된 이미지의 digest를 구한다.
-6. GitHub `production` Environment 승인 규칙을 거친다.
-7. GCP Workload Identity Federation으로 인증한다.
-8. Secret Manager의 고정 숫자 버전을 환경변수로 연결한다.
-9. Cloud Run에는 태그가 아니라 digest로 배포한다.
-10. 배포 직후 `/admin/login/` 응답을 한 번 확인한다.
-11. 그 이후의 계속되는 상태 확인은 별도 SLA 모니터링이 담당한다.
+1. 중앙 feature branch와 정확한 40자리 commit SHA로 먼저 시험한다.
+2. 백엔드 `ENABLE_DEV_CD=false` 상태에서 caller PR의 CI만 확인한다.
+3. GCP 준비 뒤 백엔드 `main`에서 `workflow_dispatch`의 `action=build`로 최초 image를 만든다.
+4. 관리자가 개발 service와 migration Job을 bootstrap한 뒤 `action=deploy`로 수동 배포한다.
+5. migration 실패 시 backend deploy가 시작되지 않는지 확인한다.
+6. smoke 실패 시 직전 revision으로 traffic이 돌아가는지 확인한다.
+7. 이 시험을 모두 통과한 중앙 commit만 병합하고 `v3.4.0` 태그를 만든다.
+8. 백엔드 caller를 `@v3.4.0`으로 바꾼 뒤에만 `ENABLE_DEV_CD=true`를 검토한다.
 
-주의: 현재 reusable CD는 운영 migration 자체를 실행하지 않는다. migration용 Cloud Run Job을 만들고 검증하기 전에는 이 deploy job을 켜면 안 된다.
+GitHub에는 Django/JWT/DB/KOTH의 실제 값을 저장하지 않는다. 값은 GCP Secret Manager에 두고, caller에는 `latest`가 아닌 숫자 Secret version만 전달한다.
 
 ## 5단계: 중앙 버전 공개와 백엔드 PR 순서
 

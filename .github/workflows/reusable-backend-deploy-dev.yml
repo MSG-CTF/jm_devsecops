@@ -1,0 +1,776 @@
+name: Reusable Backend Development Deploy
+
+on:
+  workflow_call:
+    inputs:
+      commit_sha:
+        description: 배포 기록에 남길 호출 저장소의 40자리 commit SHA
+        required: true
+        type: string
+      project_id:
+        description: 개발 Cloud Run과 Artifact Registry가 있는 GCP project ID
+        required: true
+        type: string
+      region:
+        description: 개발 Cloud Run 리전
+        required: false
+        default: asia-northeast3
+        type: string
+      artifact_repository:
+        description: image_ref가 속해야 하는 Artifact Registry 저장소
+        required: true
+        type: string
+      image_name:
+        description: image_ref가 속해야 하는 백엔드 이미지 이름
+        required: false
+        default: backend
+        type: string
+      image_ref:
+        description: Build workflow가 출력한 image@sha256:digest 주소
+        required: true
+        type: string
+      cloud_run_service:
+        description: 미리 준비한 개발 백엔드 Cloud Run 서비스 이름
+        required: false
+        default: msg-backend-dev
+        type: string
+      migration_job:
+        description: Django migration에 사용할 Cloud Run Job 이름
+        required: false
+        default: msg-backend-migrate-dev
+        type: string
+      backend_runtime_service_account:
+        description: 백엔드 Cloud Run 전용 runtime 서비스 계정 이메일
+        required: true
+        type: string
+      migration_runtime_service_account:
+        description: migration Job 전용 runtime 서비스 계정 이메일
+        required: true
+        type: string
+      vpc_network:
+        description: 자체 운영 PostgreSQL·Redis가 연결된 VPC 이름
+        required: true
+        type: string
+      vpc_subnet:
+        description: Direct VPC egress에 사용할 같은 리전 subnet 이름
+        required: true
+        type: string
+      data_network_tag:
+        description: PostgreSQL·Redis 방화벽이 허용할 Cloud Run 전용 network tag
+        required: true
+        type: string
+      workload_identity_provider:
+        description: GitHub OIDC를 허용하는 GCP WIF provider 전체 resource 이름
+        required: true
+        type: string
+      deployer_service_account:
+        description: Cloud Run 배포·Job 실행 권한이 있는 GCP 서비스 계정
+        required: true
+        type: string
+      django_allowed_hosts:
+        description: 쉼표로 구분한 정확한 개발 Cloud Run host와 개발 도메인
+        required: true
+        type: string
+      postgres_db:
+        description: 개발 PostgreSQL database 이름
+        required: true
+        type: string
+      postgres_user:
+        description: 개발 PostgreSQL 애플리케이션 사용자
+        required: true
+        type: string
+      migration_postgres_user:
+        description: schema 변경만 허용할 개발 PostgreSQL migration 사용자
+        required: true
+        type: string
+      postgres_host:
+        description: 자체 운영 PostgreSQL의 고정 private IP 또는 내부 hostname
+        required: true
+        type: string
+      postgres_port:
+        description: PostgreSQL port
+        required: false
+        default: "5432"
+        type: string
+      scheduler_base_url:
+        description: 경로가 없는 개발 Scheduler http/https origin
+        required: true
+        type: string
+      django_secret_id:
+        description: Django key Secret Manager secret ID
+        required: false
+        default: django-secret-key-dev
+        type: string
+      django_secret_version:
+        description: Django key의 latest가 아닌 숫자 Secret version
+        required: true
+        type: string
+      jwt_secret_id:
+        description: JWT key Secret Manager secret ID
+        required: false
+        default: jwt-secret-dev
+        type: string
+      jwt_secret_version:
+        description: JWT key의 latest가 아닌 숫자 Secret version
+        required: true
+        type: string
+      postgres_password_secret_id:
+        description: PostgreSQL password Secret Manager secret ID
+        required: false
+        default: postgres-password-dev
+        type: string
+      postgres_password_secret_version:
+        description: PostgreSQL password의 숫자 Secret version
+        required: true
+        type: string
+      migration_postgres_password_secret_id:
+        description: migration PostgreSQL password Secret Manager secret ID
+        required: false
+        default: migration-postgres-password-dev
+        type: string
+      migration_postgres_password_secret_version:
+        description: migration PostgreSQL password의 숫자 Secret version
+        required: true
+        type: string
+      redis_secret_id:
+        description: 인증정보를 포함한 Redis URL Secret Manager secret ID
+        required: false
+        default: redis-url-dev
+        type: string
+      redis_secret_version:
+        description: Redis URL의 latest가 아닌 숫자 Secret version
+        required: true
+        type: string
+      koth_secret_id:
+        description: KOTH team token Secret Manager secret ID
+        required: false
+        default: koth-team-token-secret-dev
+        type: string
+      koth_secret_version:
+        description: KOTH team token의 숫자 Secret version
+        required: true
+        type: string
+      smoke_test_path:
+        description: 인증 없이 HTTP 성공해야 하는 기존 Django path
+        required: false
+        default: /admin/login/
+        type: string
+      dast_seed_paths_json:
+        description: ZAP이 각각 확인할 JSON path 배열(최소 2개, API path 1개 이상)
+        required: false
+        default: '["/admin/login/", "/api/v1/timer"]'
+        type: string
+    outputs:
+      service_url:
+        description: 배포된 개발 Cloud Run URL
+        value: ${{ jobs.migrate-deploy-smoke.outputs.service_url }}
+      revision_name:
+        description: 새로 배포된 Cloud Run revision
+        value: ${{ jobs.migrate-deploy-smoke.outputs.revision_name }}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-dev-deploy-${{ inputs.project_id }}-${{ inputs.cloud_run_service }}
+  cancel-in-progress: false
+
+jobs:
+  migrate-deploy-smoke:
+    runs-on: ubuntu-latest
+    environment: development
+    permissions:
+      attestations: read
+      contents: read
+      id-token: write
+    outputs:
+      service_url: ${{ steps.deployed.outputs.service_url }}
+      revision_name: ${{ steps.deployed.outputs.revision_name }}
+    env:
+      COMMIT_SHA: ${{ inputs.commit_sha }}
+      PROJECT_ID: ${{ inputs.project_id }}
+      REGION: ${{ inputs.region }}
+      ARTIFACT_REPOSITORY: ${{ inputs.artifact_repository }}
+      IMAGE_NAME: ${{ inputs.image_name }}
+      IMAGE_REF: ${{ inputs.image_ref }}
+      CLOUD_RUN_SERVICE: ${{ inputs.cloud_run_service }}
+      MIGRATION_JOB: ${{ inputs.migration_job }}
+      BACKEND_RUNTIME_SERVICE_ACCOUNT: ${{ inputs.backend_runtime_service_account }}
+      MIGRATION_RUNTIME_SERVICE_ACCOUNT: ${{ inputs.migration_runtime_service_account }}
+      VPC_NETWORK: ${{ inputs.vpc_network }}
+      VPC_SUBNET: ${{ inputs.vpc_subnet }}
+      DATA_NETWORK_TAG: ${{ inputs.data_network_tag }}
+      DJANGO_ALLOWED_HOSTS: ${{ inputs.django_allowed_hosts }}
+      POSTGRES_DB: ${{ inputs.postgres_db }}
+      POSTGRES_USER: ${{ inputs.postgres_user }}
+      MIGRATION_POSTGRES_USER: ${{ inputs.migration_postgres_user }}
+      POSTGRES_HOST: ${{ inputs.postgres_host }}
+      POSTGRES_PORT: ${{ inputs.postgres_port }}
+      SCHEDULER_BASE_URL: ${{ inputs.scheduler_base_url }}
+      DJANGO_SECRET_ID: ${{ inputs.django_secret_id }}
+      DJANGO_SECRET_VERSION: ${{ inputs.django_secret_version }}
+      JWT_SECRET_ID: ${{ inputs.jwt_secret_id }}
+      JWT_SECRET_VERSION: ${{ inputs.jwt_secret_version }}
+      POSTGRES_PASSWORD_SECRET_ID: ${{ inputs.postgres_password_secret_id }}
+      POSTGRES_PASSWORD_SECRET_VERSION: ${{ inputs.postgres_password_secret_version }}
+      MIGRATION_POSTGRES_PASSWORD_SECRET_ID: ${{ inputs.migration_postgres_password_secret_id }}
+      MIGRATION_POSTGRES_PASSWORD_SECRET_VERSION: ${{ inputs.migration_postgres_password_secret_version }}
+      REDIS_SECRET_ID: ${{ inputs.redis_secret_id }}
+      REDIS_SECRET_VERSION: ${{ inputs.redis_secret_version }}
+      KOTH_SECRET_ID: ${{ inputs.koth_secret_id }}
+      KOTH_SECRET_VERSION: ${{ inputs.koth_secret_version }}
+      SMOKE_TEST_PATH: ${{ inputs.smoke_test_path }}
+      DAST_SEED_PATHS_JSON: ${{ inputs.dast_seed_paths_json }}
+      DEPLOYER_SERVICE_ACCOUNT: ${{ inputs.deployer_service_account }}
+    steps:
+      - name: 배포 입력값 확인
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          [[ "$COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "commit_sha는 소문자 40자리 Git SHA여야 합니다."
+            exit 1
+          }
+          [[ "$PROJECT_ID" =~ ^[a-z][a-z0-9-]{4,28}[a-z0-9]$ ]] || {
+            echo "project_id 형식이 올바르지 않습니다."
+            exit 1
+          }
+          [[ "$REGION" =~ ^[a-z]+-[a-z0-9]+[0-9]$ ]] || {
+            echo "region 형식이 올바르지 않습니다."
+            exit 1
+          }
+          for value in \
+            "$ARTIFACT_REPOSITORY" \
+            "$IMAGE_NAME" \
+            "$CLOUD_RUN_SERVICE" \
+            "$MIGRATION_JOB" \
+            "$VPC_NETWORK" \
+            "$VPC_SUBNET" \
+            "$DATA_NETWORK_TAG" \
+            "$DJANGO_SECRET_ID" \
+            "$JWT_SECRET_ID" \
+            "$POSTGRES_PASSWORD_SECRET_ID" \
+            "$MIGRATION_POSTGRES_PASSWORD_SECRET_ID" \
+            "$REDIS_SECRET_ID" \
+            "$KOTH_SECRET_ID"
+          do
+            [[ "$value" =~ ^[a-z][a-z0-9._-]{0,62}$ ]] || {
+              echo "GCP resource 이름 형식이 올바르지 않습니다: $value"
+              exit 1
+            }
+          done
+          expected_deployer="github-backend-deployer-dev@${PROJECT_ID}.iam.gserviceaccount.com"
+          test "$DEPLOYER_SERVICE_ACCOUNT" = "$expected_deployer" || {
+            echo "deployer_service_account는 승인된 개발 deployer여야 합니다."
+            exit 1
+          }
+          test "$POSTGRES_USER" != "$MIGRATION_POSTGRES_USER" || {
+            echo "앱 DB 사용자와 migration DB 사용자는 서로 달라야 합니다."
+            exit 1
+          }
+          [[ "$DATA_NETWORK_TAG" =~ ^[a-z][a-z0-9-]{0,62}$ ]] || {
+            echo "data_network_tag는 소문자, 숫자와 하이픈만 사용하는 1~63자 tag여야 합니다."
+            exit 1
+          }
+          for account in \
+            "$BACKEND_RUNTIME_SERVICE_ACCOUNT" \
+            "$MIGRATION_RUNTIME_SERVICE_ACCOUNT"
+          do
+            [[ "$account" =~ ^[a-z0-9-]+@${PROJECT_ID}\.iam\.gserviceaccount\.com$ ]] || {
+              echo "runtime 서비스 계정이 현재 project 소속의 올바른 이메일이 아닙니다."
+              exit 1
+            }
+          done
+          expected_prefix="${REGION}-docker.pkg.dev/${PROJECT_ID}/${ARTIFACT_REPOSITORY}/${IMAGE_NAME}@sha256:"
+          [[ "$IMAGE_REF" == "$expected_prefix"* ]] || {
+            echo "image_ref가 입력한 project/repository/image의 digest 주소가 아닙니다."
+            exit 1
+          }
+          digest="${IMAGE_REF##*@}"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+            echo "image_ref digest 형식이 올바르지 않습니다."
+            exit 1
+          }
+          [[ "$POSTGRES_PORT" =~ ^[0-9]{1,5}$ ]] || {
+            echo "postgres_port 형식이 올바르지 않습니다."
+            exit 1
+          }
+          [[ "$SCHEDULER_BASE_URL" =~ ^https?://[^/[:space:]]+/?$ ]] || {
+            echo "scheduler_base_url은 경로가 없는 http/https origin이어야 합니다."
+            exit 1
+          }
+          if [[ "$SMOKE_TEST_PATH" != /* ||
+                "$SMOKE_TEST_PATH" == *"?"* ||
+                "$SMOKE_TEST_PATH" == *"#"* ||
+                "$SMOKE_TEST_PATH" =~ [[:space:]] ]]; then
+            echo "smoke_test_path는 query, fragment, 공백이 없는 상대 path여야 합니다."
+            exit 1
+          fi
+          jq -e '
+            type == "array" and
+            length >= 2 and
+            all(.[];
+              type == "string" and
+              startswith("/") and
+              (contains("?") | not) and
+              (contains("#") | not) and
+              (test("[[:space:]]") | not)) and
+            any(.[]; startswith("/api/"))
+          ' <<< "$DAST_SEED_PATHS_JSON" >/dev/null || {
+            echo "dast_seed_paths_json은 안전한 path 2개 이상과 /api/ path 1개 이상이 필요합니다."
+            exit 1
+          }
+          for version in \
+            "$DJANGO_SECRET_VERSION" \
+            "$JWT_SECRET_VERSION" \
+            "$POSTGRES_PASSWORD_SECRET_VERSION" \
+            "$MIGRATION_POSTGRES_PASSWORD_SECRET_VERSION" \
+            "$REDIS_SECRET_VERSION" \
+            "$KOTH_SECRET_VERSION"
+          do
+            [[ "$version" =~ ^[1-9][0-9]*$ ]] || {
+              echo "Secret version은 latest가 아닌 숫자여야 합니다."
+              exit 1
+            }
+          done
+
+      - name: GCP WIF 인증
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          project_id: ${{ inputs.project_id }}
+          workload_identity_provider: ${{ inputs.workload_identity_provider }}
+          service_account: ${{ inputs.deployer_service_account }}
+
+      - name: gcloud 설정
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+        with:
+          project_id: ${{ inputs.project_id }}
+
+      - name: GCP 배포 전제조건 확인
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gcloud artifacts docker images describe "$IMAGE_REF" >/dev/null
+          gcloud compute networks describe "$VPC_NETWORK" >/dev/null
+          gcloud compute networks subnets describe "$VPC_SUBNET" \
+            --region="$REGION" >/dev/null
+
+          for item in \
+            "$DJANGO_SECRET_ID:$DJANGO_SECRET_VERSION" \
+            "$JWT_SECRET_ID:$JWT_SECRET_VERSION" \
+            "$POSTGRES_PASSWORD_SECRET_ID:$POSTGRES_PASSWORD_SECRET_VERSION" \
+            "$MIGRATION_POSTGRES_PASSWORD_SECRET_ID:$MIGRATION_POSTGRES_PASSWORD_SECRET_VERSION" \
+            "$REDIS_SECRET_ID:$REDIS_SECRET_VERSION" \
+            "$KOTH_SECRET_ID:$KOTH_SECRET_VERSION"
+          do
+            secret_id="${item%%:*}"
+            secret_version="${item##*:}"
+            state="$(
+              gcloud secrets versions describe "$secret_version" \
+                --secret="$secret_id" \
+                --format='value(state)'
+            )"
+            test "$state" = "ENABLED" || {
+              echo "$secret_id:$secret_version 상태가 ENABLED가 아닙니다."
+              exit 1
+            }
+          done
+
+      - name: private Registry 인증 후 Build provenance 재검증
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+          gh attestation verify "oci://${IMAGE_REF}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow \
+              "MSG-CTF/jm_devsecops/.github/workflows/reusable-backend-build.yml" \
+            --source-digest "$COMMIT_SHA" \
+            --source-ref "refs/heads/main" \
+            --deny-self-hosted-runners
+
+      - name: migration과 backend의 최소 환경·Secret 분리
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          jq -n \
+            --arg allowed_hosts "$DJANGO_ALLOWED_HOSTS" \
+            --arg postgres_db "$POSTGRES_DB" \
+            --arg postgres_user "$POSTGRES_USER" \
+            --arg postgres_host "$POSTGRES_HOST" \
+            --arg postgres_port "$POSTGRES_PORT" \
+            --arg scheduler_base_url "$SCHEDULER_BASE_URL" \
+            '{
+              DJANGO_DEBUG: "False",
+              DJANGO_ALLOWED_HOSTS: $allowed_hosts,
+              POSTGRES_DB: $postgres_db,
+              POSTGRES_USER: $postgres_user,
+              POSTGRES_HOST: $postgres_host,
+              POSTGRES_PORT: $postgres_port,
+              SCHEDULER_BASE_URL: $scheduler_base_url
+            }' > "$RUNNER_TEMP/backend-dev-env.yaml"
+
+          jq -n \
+            --arg postgres_db "$POSTGRES_DB" \
+            --arg postgres_user "$MIGRATION_POSTGRES_USER" \
+            --arg postgres_host "$POSTGRES_HOST" \
+            --arg postgres_port "$POSTGRES_PORT" \
+            '{
+              DJANGO_DEBUG: "False",
+              DJANGO_ALLOWED_HOSTS: "localhost",
+              DJANGO_SECRET_KEY: "migration-job-does-not-sign-application-data",
+              JWT_SECRET: "migration-job-does-not-sign-jwt-tokens",
+              POSTGRES_DB: $postgres_db,
+              POSTGRES_USER: $postgres_user,
+              POSTGRES_HOST: $postgres_host,
+              POSTGRES_PORT: $postgres_port
+            }' > "$RUNNER_TEMP/migration-dev-env.yaml"
+
+          backend_secrets="DJANGO_SECRET_KEY=${DJANGO_SECRET_ID}:${DJANGO_SECRET_VERSION}"
+          backend_secrets+=",JWT_SECRET=${JWT_SECRET_ID}:${JWT_SECRET_VERSION}"
+          backend_secrets+=",POSTGRES_PASSWORD=${POSTGRES_PASSWORD_SECRET_ID}:${POSTGRES_PASSWORD_SECRET_VERSION}"
+          backend_secrets+=",REDIS_URL=${REDIS_SECRET_ID}:${REDIS_SECRET_VERSION}"
+          backend_secrets+=",KOTH_TEAM_TOKEN_SECRET=${KOTH_SECRET_ID}:${KOTH_SECRET_VERSION}"
+          echo "backend_secrets=${backend_secrets}" >> "$GITHUB_ENV"
+
+          migration_secrets="POSTGRES_PASSWORD=${MIGRATION_POSTGRES_PASSWORD_SECRET_ID}:${MIGRATION_POSTGRES_PASSWORD_SECRET_VERSION}"
+          echo "migration_secrets=${migration_secrets}" >> "$GITHUB_ENV"
+
+      - name: 현재 100% traffic revision 기록
+        id: previous
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          previous_revision=""
+          if gcloud run services describe "$CLOUD_RUN_SERVICE" \
+            --region="$REGION" --format=json \
+            > "$RUNNER_TEMP/previous-service.json" 2>/dev/null; then
+            previous_revision="$(
+              jq -r '
+                [.status.traffic[]? | select(.percent == 100) | .revisionName][0]
+                // empty
+              ' "$RUNNER_TEMP/previous-service.json"
+            )"
+          fi
+          echo "revision=${previous_revision}" >> "$GITHUB_OUTPUT"
+
+      - name: 같은 digest로 migration Job 배포
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          dependency_check='import os, subprocess, sys; import psycopg; connection = psycopg.connect(dbname=os.environ["POSTGRES_DB"], user=os.environ["POSTGRES_USER"], password=os.environ["POSTGRES_PASSWORD"], host=os.environ["POSTGRES_HOST"], port=os.environ["POSTGRES_PORT"], connect_timeout=10); cursor = connection.cursor(); cursor.execute("SELECT 1"); assert cursor.fetchone() == (1,); cursor.close(); connection.close(); subprocess.run([sys.executable, "manage.py", "migrate", "--noinput"], check=True)'
+
+          gcloud run jobs deploy "$MIGRATION_JOB" \
+            --project="$PROJECT_ID" \
+            --region="$REGION" \
+            --image="$IMAGE_REF" \
+            --service-account="$MIGRATION_RUNTIME_SERVICE_ACCOUNT" \
+            --network="$VPC_NETWORK" \
+            --subnet="$VPC_SUBNET" \
+            --network-tags="$DATA_NETWORK_TAG" \
+            --vpc-egress=private-ranges-only \
+            --env-vars-file="$RUNNER_TEMP/migration-dev-env.yaml" \
+            --set-secrets="$migration_secrets" \
+            --command=python \
+            --args="^|^-c|$dependency_check" \
+            --tasks=1 \
+            --parallelism=1 \
+            --max-retries=0 \
+            --task-timeout=10m \
+            --labels="managed-by=github-actions,commit-sha=$COMMIT_SHA" \
+            --quiet
+
+      - name: migration 실행 후 성공까지 대기
+        run: |
+          gcloud run jobs execute "$MIGRATION_JOB" \
+            --project="$PROJECT_ID" \
+            --region="$REGION" \
+            --wait
+
+      - name: migration이 성공한 digest를 traffic 없는 후보 revision으로 배포
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          candidate_tag="candidate-${COMMIT_SHA:0:12}"
+          echo "CANDIDATE_TAG=${candidate_tag}" >> "$GITHUB_ENV"
+          gcloud run deploy "$CLOUD_RUN_SERVICE" \
+            --project="$PROJECT_ID" \
+            --region="$REGION" \
+            --image="$IMAGE_REF" \
+            --service-account="$BACKEND_RUNTIME_SERVICE_ACCOUNT" \
+            --network="$VPC_NETWORK" \
+            --subnet="$VPC_SUBNET" \
+            --network-tags="$DATA_NETWORK_TAG" \
+            --vpc-egress=private-ranges-only \
+            --env-vars-file="$RUNNER_TEMP/backend-dev-env.yaml" \
+            --set-secrets="$backend_secrets" \
+            --labels="managed-by=github-actions,commit-sha=$COMMIT_SHA" \
+            --no-traffic \
+            --tag="$candidate_tag" \
+            --quiet
+
+      - name: 배포 결과 기록
+        id: deployed
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          service_json="$(
+            gcloud run services describe "$CLOUD_RUN_SERVICE" \
+              --project="$PROJECT_ID" \
+              --region="$REGION" \
+              --format=json
+          )"
+          service_url="$(jq -r '.status.url' <<< "$service_json")"
+          revision_name="$(jq -r '.status.latestReadyRevisionName' <<< "$service_json")"
+          candidate_url="$(
+            jq -r --arg tag "$CANDIDATE_TAG" \
+              '[.status.traffic[]? | select(.tag == $tag) | .url][0] // empty' \
+              <<< "$service_json"
+          )"
+          test -n "$service_url"
+          test -n "$revision_name"
+          test -n "$candidate_url"
+          {
+            echo "service_url=${service_url}"
+            echo "revision_name=${revision_name}"
+            echo "candidate_url=${candidate_url}"
+          } >> "$GITHUB_OUTPUT"
+          echo "후보 URL: ${candidate_url}"
+          echo "후보 revision: ${revision_name}"
+
+      - name: 후보 revision Django smoke test
+        id: smoke
+        continue-on-error: true
+        env:
+          SERVICE_URL: ${{ steps.deployed.outputs.candidate_url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for attempt in {1..20}; do
+            if curl \
+              --fail \
+              --silent \
+              --show-error \
+              --output /dev/null \
+              "${SERVICE_URL}${SMOKE_TEST_PATH}"; then
+              echo "Django smoke test가 성공했습니다."
+              exit 0
+            fi
+            echo "smoke test 재시도: ${attempt}/20"
+            sleep 3
+          done
+          echo "새 revision이 smoke test를 통과하지 못했습니다."
+          exit 1
+
+      - name: 후보 revision의 PostgreSQL·Redis runtime 확인
+        id: runtime-dependencies
+        if: steps.smoke.outcome == 'success'
+        continue-on-error: true
+        env:
+          SERVICE_URL: ${{ steps.deployed.outputs.candidate_url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          login_id="__cd_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}__"
+          request_body="$(jq -nc --arg login_id "$login_id" \
+            '{login_id: $login_id, password: "not-a-real-password"}')"
+
+          for attempt in {1..10}; do
+            status="$(curl --silent --show-error --output /dev/null \
+              --write-out '%{http_code}' \
+              --request POST \
+              --header 'Content-Type: application/json' \
+              --data "$request_body" \
+              "${SERVICE_URL%/}/api/v1/auth/login")"
+            test "$status" = "401" || {
+              echo "${attempt}번째 로그인 실패 요청이 예상한 401이 아닙니다: HTTP ${status}"
+              exit 1
+            }
+          done
+
+          status="$(curl --silent --show-error --output /dev/null \
+            --write-out '%{http_code}' \
+            --request POST \
+            --header 'Content-Type: application/json' \
+            --data "$request_body" \
+            "${SERVICE_URL%/}/api/v1/auth/login")"
+          test "$status" = "429" || {
+            echo "11번째 요청이 429가 아닙니다: HTTP ${status}"
+            echo "PostgreSQL 조회 또는 Redis 기반 로그인 throttle을 확인하세요."
+            exit 1
+          }
+          echo "PostgreSQL 사용자 조회와 Redis 10/min throttle이 모두 확인됐습니다."
+
+      - name: DAST seed path 접근·coverage 확인
+        id: dast-coverage
+        if: steps.runtime-dependencies.outcome == 'success'
+        continue-on-error: true
+        env:
+          SERVICE_URL: ${{ steps.deployed.outputs.candidate_url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r path; do
+            status="$(curl --silent --show-error --output /dev/null \
+              --write-out '%{http_code}' "${SERVICE_URL%/}${path}")"
+            if [[ "$status" == "000" || "$status" == "404" || "$status" =~ ^5 ]]; then
+              echo "DAST seed가 유효한 endpoint가 아닙니다: ${path} (HTTP ${status})"
+              exit 1
+            fi
+            echo "DAST seed 확인: ${path} (HTTP ${status})"
+          done < <(jq -r '.[]' <<< "$DAST_SEED_PATHS_JSON")
+
+      - name: OWASP ZAP seed별 passive baseline DAST
+        id: dast
+        if: steps.dast-coverage.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 15
+        env:
+          SERVICE_URL: ${{ steps.deployed.outputs.candidate_url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          report_dir="$RUNNER_TEMP/zap-report"
+          mkdir -p "$report_dir"
+          chmod 0777 "$report_dir"
+          index=0
+          total_high=0
+          while IFS= read -r path; do
+            index=$((index + 1))
+            seed_dir="${report_dir}/seed-${index}"
+            mkdir -p "$seed_dir"
+            chmod 0777 "$seed_dir"
+            set +e
+            docker run --rm \
+              -v "${seed_dir}:/zap/wrk/:rw" \
+              zaproxy/zap-stable:latest@sha256:781a2bdaea47324e7bab583e2263f21d257b0aee61ed51521a5be45f5f5081ef \
+              zap-baseline.py \
+              -t "${SERVICE_URL%/}${path}" \
+              -m 3 \
+              -I \
+              -J report.json \
+              -w report.md \
+              -r report.html
+            zap_exit="$?"
+            set -e
+            if [[ "$zap_exit" -eq 3 ]]; then
+              echo "ZAP 자체 실행 오류가 발생했습니다: ${path}"
+              exit 1
+            fi
+            test -s "$seed_dir/report.json" || {
+              echo "ZAP JSON 보고서가 만들어지지 않았습니다: ${path}"
+              exit 1
+            }
+            high_count="$(
+              jq '[.site[]?.alerts[]? | select((.riskcode | tonumber) >= 3)] | length' \
+                "$seed_dir/report.json"
+            )"
+            total_high=$((total_high + high_count))
+          done < <(jq -r '.[]' <<< "$DAST_SEED_PATHS_JSON")
+          echo "ZAP High 이상 발견 수: ${total_high}"
+          test "$total_high" -eq 0 || {
+            echo "High 이상 DAST 발견으로 개발 배포를 실패 처리합니다."
+            exit 1
+          }
+
+      - name: ZAP DAST 보고서 업로드
+        id: zap-artifact
+        if: always() && steps.dast.outcome != 'skipped'
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: zap-backend-development-${{ github.run_id }}
+          path: ${{ runner.temp }}/zap-report/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: 모든 후보 검사가 성공한 revision에만 100% traffic 전환
+        id: promote
+        if: >-
+          steps.smoke.outcome == 'success' &&
+          steps.runtime-dependencies.outcome == 'success' &&
+          steps.dast-coverage.outcome == 'success' &&
+          steps.dast.outcome == 'success' &&
+          steps.zap-artifact.outcome == 'success'
+        env:
+          NEW_REVISION: ${{ steps.deployed.outputs.revision_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run services update-traffic "$CLOUD_RUN_SERVICE" \
+            --project="$PROJECT_ID" \
+            --region="$REGION" \
+            --to-revisions="${NEW_REVISION}=100" \
+            --quiet
+
+      - name: traffic 전환 후 공개 URL smoke test
+        id: post-promote-smoke
+        if: steps.promote.outcome == 'success'
+        continue-on-error: true
+        env:
+          SERVICE_URL: ${{ steps.deployed.outputs.service_url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in {1..10}; do
+            if curl --fail --silent --show-error --output /dev/null \
+              "${SERVICE_URL}${SMOKE_TEST_PATH}"; then
+              exit 0
+            fi
+            echo "전환 후 smoke test 재시도: ${attempt}/10"
+            sleep 3
+          done
+          exit 1
+
+      - name: traffic 전환 후 실패 시 직전 revision으로 rollback
+        if: >-
+          always() && !cancelled() &&
+          steps.post-promote-smoke.outcome == 'failure' &&
+          steps.previous.outputs.revision != ''
+        env:
+          PREVIOUS_REVISION: ${{ steps.previous.outputs.revision }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "직전 revision ${PREVIOUS_REVISION}(으)로 traffic을 되돌립니다."
+          gcloud run services update-traffic "$CLOUD_RUN_SERVICE" \
+            --project="$PROJECT_ID" \
+            --region="$REGION" \
+            --to-revisions="${PREVIOUS_REVISION}=100" \
+            --quiet
+
+      - name: 후보 tag 정리
+        if: always() && env.CANDIDATE_TAG != ''
+        continue-on-error: true
+        run: |
+          gcloud run services update-traffic "$CLOUD_RUN_SERVICE" \
+            --project="$PROJECT_ID" \
+            --region="$REGION" \
+            --remove-tags="$CANDIDATE_TAG" \
+            --quiet
+
+      - name: 검사·전환·보고서 실패를 최종 배포 실패로 처리
+        if: >-
+          always() &&
+          (steps.smoke.outcome == 'failure' ||
+           steps.runtime-dependencies.outcome == 'failure' ||
+           steps.dast-coverage.outcome == 'failure' ||
+           steps.dast.outcome == 'failure' ||
+           steps.zap-artifact.outcome == 'failure' ||
+           steps.promote.outcome != 'success' ||
+           steps.post-promote-smoke.outcome == 'failure')
+        run: |
+          echo "후보 검사, DAST 보고서, traffic 전환 중 하나가 실패했습니다."
+          echo "Migration은 이미 적용됐을 수 있으므로 DB를 무조건 되돌리지 마세요."
+          exit 1
