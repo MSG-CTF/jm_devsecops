@@ -1,0 +1,137 @@
+name: Reusable Development VM Deploy
+
+on:
+  workflow_call:
+    inputs:
+      component:
+        description: 배포할 구성요소(backend 또는 frontend)
+        required: true
+        type: string
+      commit_sha:
+        description: 호출 저장소 main의 정확한 40자리 commit SHA
+        required: true
+        type: string
+      pipeline_ref:
+        description: 이 워크플로와 같은 중앙 저장소 commit SHA
+        required: true
+        type: string
+      gcp_project_id:
+        description: 개발 VM이 있는 GCP 프로젝트 ID
+        required: true
+        type: string
+      workload_identity_provider:
+        description: GitHub OIDC를 허용한 WIF provider 전체 이름
+        required: true
+        type: string
+      deployer_service_account:
+        description: 개발 VM 배포 전용 GCP 서비스 계정 이메일
+        required: true
+        type: string
+      vm_zone:
+        description: 개발 VM zone
+        required: false
+        default: asia-northeast3-a
+        type: string
+      vm_name:
+        description: 개발 VM 이름
+        required: false
+        default: backend-dev-vm
+        type: string
+      public_domain:
+        description: HTTPS smoke test에 사용할 개발 도메인
+        required: false
+        default: msg2.mjsec.kr
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: development-vm-${{ inputs.gcp_project_id }}-${{ inputs.vm_name }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: deploy-${{ inputs.component }}
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: development
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: 호출 저장소와 입력값 검증
+        shell: bash
+        env:
+          COMPONENT: ${{ inputs.component }}
+          COMMIT_SHA: ${{ inputs.commit_sha }}
+          PIPELINE_REF: ${{ inputs.pipeline_ref }}
+        run: |
+          set -Eeuo pipefail
+          case "${COMPONENT}:${GITHUB_REPOSITORY}" in
+            backend:MSG-CTF/msg-backend | frontend:MSG-CTF/front-team) ;;
+            *) echo "허용되지 않은 component/repository 조합입니다." >&2; exit 1 ;;
+          esac
+          [[ "$COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$PIPELINE_REF" =~ ^[0-9a-f]{40}$ ]]
+          test "$COMMIT_SHA" = "$GITHUB_SHA"
+
+      - name: 중앙 배포 스크립트 checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: MSG-CTF/jm_devsecops
+          ref: ${{ inputs.pipeline_ref }}
+          path: central-pipeline
+          persist-credentials: false
+
+      - name: 배포 스크립트 무결성 검증
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cd central-pipeline
+          test "$(sha256sum scripts/deploy-development-vm.sh | awk '{print $1}')" = \
+            '256a00022c5aaed1a539534e5c1dfd0b175983d2fa9f1b1c40475613887a25e8'
+          shellcheck scripts/deploy-development-vm.sh
+
+      - name: GCP 인증 (키 파일 없는 WIF)
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ inputs.workload_identity_provider }}
+          service_account: ${{ inputs.deployer_service_account }}
+          create_credentials_file: true
+
+      - name: gcloud 준비
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: IAP를 통해 배포 스크립트 전송
+        shell: bash
+        env:
+          PROJECT_ID: ${{ inputs.gcp_project_id }}
+          VM_ZONE: ${{ inputs.vm_zone }}
+          VM_NAME: ${{ inputs.vm_name }}
+        run: |
+          set -Eeuo pipefail
+          gcloud compute scp --quiet --tunnel-through-iap \
+            --project "$PROJECT_ID" --zone "$VM_ZONE" \
+            central-pipeline/scripts/deploy-development-vm.sh \
+            "${VM_NAME}:/tmp/deploy-development-vm.sh"
+
+      - name: 정확한 main SHA를 개발 VM에 배포
+        shell: bash
+        env:
+          COMPONENT: ${{ inputs.component }}
+          COMMIT_SHA: ${{ inputs.commit_sha }}
+          PROJECT_ID: ${{ inputs.gcp_project_id }}
+          PUBLIC_DOMAIN: ${{ inputs.public_domain }}
+          VM_ZONE: ${{ inputs.vm_zone }}
+          VM_NAME: ${{ inputs.vm_name }}
+        run: |
+          set -Eeuo pipefail
+          case "$COMPONENT" in
+            backend) repository='MSG-CTF/msg-backend' ;;
+            frontend) repository='MSG-CTF/front-team' ;;
+            *) exit 1 ;;
+          esac
+          gcloud compute ssh --quiet --tunnel-through-iap \
+            --project "$PROJECT_ID" --zone "$VM_ZONE" "$VM_NAME" --command \
+            "sudo bash /tmp/deploy-development-vm.sh '$COMPONENT' '$repository' '$COMMIT_SHA' '$PUBLIC_DOMAIN' '$GITHUB_RUN_ID'"

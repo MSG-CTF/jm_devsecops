@@ -7,6 +7,7 @@
 - CI는 코드가 들어올 때마다 보안, Python/Django, PostgreSQL, Redis, Docker를 자동 검사한다.
 - SAST는 Semgrep과 Bandit을 함께 사용한다. SCA와 컨테이너 취약점 검사는 Trivy가 담당하고, 유출된 비밀값은 Gitleaks가 찾는다.
 - CD 코드는 준비되어 있지만 아직 백엔드에서 호출하지 않는다. Cloud SQL, Redis, Secret Manager, 운영 migration 절차와 승인 규칙을 준비한 뒤 켜야 한다.
+- 개발 확인 사이트용 VM 자동배포는 운영 Cloud Run CD와 분리되어 있다. 사용법과 보안 조건은 `docs/development-vm-auto-deploy.md`에 있다.
 - 백엔드는 움직이는 `@main`이 아니라 고정된 `@v3.3.1`을 호출해야 한다.
 - 별도의 `/healthz` API는 요구하지 않는다. CI와 CD는 기존 `/admin/login/`을 한 번 요청해서 시작 여부만 확인한다.
 

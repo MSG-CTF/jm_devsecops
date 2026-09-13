@@ -18,3 +18,13 @@ jobs:
     uses: ./.github/workflows/reusable-ci.yml
     with:
       enforce_black: true
+
+  deployment-script-lint:
+    name: deployment-script-lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: ShellCheck
+        run: shellcheck scripts/deploy-development-vm.sh
