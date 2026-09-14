@@ -107,14 +107,16 @@ jobs:
         shell: bash
         env:
           PROJECT_ID: ${{ inputs.gcp_project_id }}
+          REMOTE_SCRIPT_NAME: msg-dev-deploy-${{ github.run_id }}-${{ github.run_attempt }}.sh
           VM_ZONE: ${{ inputs.vm_zone }}
           VM_NAME: ${{ inputs.vm_name }}
         run: |
           set -Eeuo pipefail
+          [[ "$REMOTE_SCRIPT_NAME" =~ ^msg-dev-deploy-[0-9]+-[0-9]+\.sh$ ]]
           gcloud compute scp --quiet --tunnel-through-iap \
             --project "$PROJECT_ID" --zone "$VM_ZONE" \
             central-pipeline/scripts/deploy-development-vm.sh \
-            "${VM_NAME}:/tmp/deploy-development-vm.sh"
+            "${VM_NAME}:${REMOTE_SCRIPT_NAME}"
 
       - name: 정확한 main SHA를 개발 VM에 배포
         shell: bash
@@ -123,10 +125,12 @@ jobs:
           COMMIT_SHA: ${{ inputs.commit_sha }}
           PROJECT_ID: ${{ inputs.gcp_project_id }}
           PUBLIC_DOMAIN: ${{ inputs.public_domain }}
+          REMOTE_SCRIPT_NAME: msg-dev-deploy-${{ github.run_id }}-${{ github.run_attempt }}.sh
           VM_ZONE: ${{ inputs.vm_zone }}
           VM_NAME: ${{ inputs.vm_name }}
         run: |
           set -Eeuo pipefail
+          [[ "$REMOTE_SCRIPT_NAME" =~ ^msg-dev-deploy-[0-9]+-[0-9]+\.sh$ ]]
           case "$COMPONENT" in
             backend) repository='MSG-CTF/msg-backend' ;;
             frontend) repository='MSG-CTF/front-team' ;;
@@ -134,4 +138,20 @@ jobs:
           esac
           gcloud compute ssh --quiet --tunnel-through-iap \
             --project "$PROJECT_ID" --zone "$VM_ZONE" "$VM_NAME" --command \
-            "sudo bash /tmp/deploy-development-vm.sh '$COMPONENT' '$repository' '$COMMIT_SHA' '$PUBLIC_DOMAIN' '$GITHUB_RUN_ID'"
+            "sudo bash '$REMOTE_SCRIPT_NAME' '$COMPONENT' '$repository' '$COMMIT_SHA' '$PUBLIC_DOMAIN' '$GITHUB_RUN_ID'"
+
+      - name: 원격 임시 배포 스크립트 정리
+        if: always()
+        continue-on-error: true
+        shell: bash
+        env:
+          PROJECT_ID: ${{ inputs.gcp_project_id }}
+          REMOTE_SCRIPT_NAME: msg-dev-deploy-${{ github.run_id }}-${{ github.run_attempt }}.sh
+          VM_ZONE: ${{ inputs.vm_zone }}
+          VM_NAME: ${{ inputs.vm_name }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$REMOTE_SCRIPT_NAME" =~ ^msg-dev-deploy-[0-9]+-[0-9]+\.sh$ ]]
+          gcloud compute ssh --quiet --tunnel-through-iap \
+            --project "$PROJECT_ID" --zone "$VM_ZONE" "$VM_NAME" --command \
+            "rm -f '$REMOTE_SCRIPT_NAME'"
