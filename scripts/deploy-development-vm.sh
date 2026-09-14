@@ -106,7 +106,11 @@ git -C "$work_dir" init --quiet
 git -C "$work_dir" remote add origin "https://github.com/${REPOSITORY}.git"
 git -C "$work_dir" fetch --quiet --depth=1 origin "$COMMIT_SHA"
 test "$(git -C "$work_dir" rev-parse FETCH_HEAD)" = "$COMMIT_SHA"
-git -C "$work_dir" checkout --quiet --detach FETCH_HEAD
+# 작업 디렉터리 자체는 mktemp의 0700 권한으로 다른 사용자가 접근하지 못한다.
+# 다만 checkout까지 전역 umask 077을 적용하면 Git의 0644 파일이 0600으로
+# 생성되어, Docker 이미지 안의 비루트 프로세스가 COPY된 파일을 읽지 못한다.
+# checkout 한 번만 정상 umask를 사용해 저장소에 기록된 실행 권한을 보존한다.
+(umask 022 && git -C "$work_dir" checkout --quiet --detach FETCH_HEAD)
 test -f "$work_dir/Dockerfile" || {
   echo "저장소 루트에 Dockerfile이 없습니다." >&2
   exit 1
