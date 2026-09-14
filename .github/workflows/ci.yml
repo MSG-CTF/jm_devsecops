@@ -28,3 +28,11 @@ jobs:
 
       - name: ShellCheck
         run: shellcheck scripts/deploy-development-vm.sh
+
+      - name: 배포 스크립트 무결성 값 일치 확인
+        run: |
+          set -Eeuo pipefail
+          actual_hash="$(sha256sum scripts/deploy-development-vm.sh | awk '{print $1}')"
+          grep --fixed-strings --quiet \
+            "'${actual_hash}'" \
+            .github/workflows/reusable-vm-deploy-dev.yml
