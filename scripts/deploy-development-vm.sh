@@ -60,7 +60,7 @@ work_dir="$(mktemp -d "/tmp/msg-dev-${COMPONENT}.XXXXXX")"
 candidate_container="msg-dev-${COMPONENT}-candidate-${DEPLOYMENT_ID}"
 candidate_image="msg-dev-${COMPONENT}:candidate-${COMMIT_SHA:0:12}"
 stable_image="msg-dev-${COMPONENT}:latest"
-rollback_image="msg-dev-${COMPONENT}:rollback-${DEPLOYMENT_ID}"
+rollback_image="msg-dev-${COMPONENT}:rollback"
 rollback_available=false
 switched=false
 
@@ -73,6 +73,26 @@ trap cleanup EXIT
 compose() {
   docker compose --project-name "$COMPOSE_PROJECT" \
     --file "$COMPOSE_FILE" --env-file "$ENV_FILE" "$@"
+}
+
+# 10GB 개발 VM에서 배포할 때마다 후보·롤백 태그와 BuildKit 캐시가 계속
+# 쌓이지 않게 한다. 실행 중인 latest 이미지와 DB/Redis 볼륨은 건드리지 않는다.
+prune_deployment_artifacts() {
+  local stale_image
+
+  for reference in \
+    "msg-dev-${COMPONENT}:candidate-*" \
+    "msg-dev-${COMPONENT}:rollback-*"; do
+    while IFS= read -r stale_image; do
+      [[ -n "$stale_image" ]] || continue
+      docker image rm "$stale_image" >/dev/null 2>&1 || true
+    done < <(docker image ls --filter "reference=${reference}" \
+      --format '{{.Repository}}:{{.Tag}}')
+  done
+
+  docker image prune --force >/dev/null 2>&1 || true
+  docker builder prune --all --force \
+    --max-used-space 1GB --min-free-space 2GB >/dev/null 2>&1 || true
 }
 
 # 로그인하지 않은 API 점검은 정상적으로 401을 돌려줄 수 있다. 연결 성공은
@@ -100,6 +120,9 @@ on_error() {
   exit "$exit_code"
 }
 trap on_error ERR
+
+echo "[준비] 오래된 배포 이미지와 빌드 캐시 정리"
+prune_deployment_artifacts
 
 echo "[1/7] 정확한 ${REPOSITORY}@${COMMIT_SHA} 가져오기"
 git -C "$work_dir" init --quiet
@@ -217,4 +240,6 @@ echo "[7/7] 성공한 SHA 기록"
 printf '%s\n' "$COMMIT_SHA" >"${STATE_DIR}/${COMPONENT}.sha"
 printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"${STATE_DIR}/${COMPONENT}.deployed-at"
 switched=false
+docker image rm "$candidate_image" >/dev/null 2>&1 || true
+prune_deployment_artifacts
 echo "배포 성공: ${COMPONENT} ${COMMIT_SHA}"
