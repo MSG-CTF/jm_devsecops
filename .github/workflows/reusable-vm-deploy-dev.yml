@@ -90,7 +90,7 @@ jobs:
           set -Eeuo pipefail
           cd central-pipeline
           test "$(sha256sum scripts/deploy-development-vm.sh | awk '{print $1}')" = \
-            '2b2e056a4f733ce985e3ccde5ab2d46bf054aa63de5ee05cb0eb24aafbfbf5fc'
+            'ed810aa25b060acbd22bfd61c92b20a0ead5b108c65247f64c1a522e967874ec'
           shellcheck scripts/deploy-development-vm.sh
 
       - name: GCP 인증 (키 파일 없는 WIF)
