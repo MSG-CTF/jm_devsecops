@@ -90,7 +90,9 @@ jobs:
           set -Eeuo pipefail
           cd central-pipeline
           test "$(sha256sum scripts/deploy-development-vm.sh | awk '{print $1}')" = \
-            'ed810aa25b060acbd22bfd61c92b20a0ead5b108c65247f64c1a522e967874ec'
+            '05d4577b6307af24b6a598c844824f7932d70e033b20b46ca69f8d70f9bd4f32'
+          test "$(sha256sum scripts/backend_proxy_bridge.py | awk '{print $1}')" = \
+            'e4d8c8b0b19114a3c5f818002043df01a9ee0062d65a99474d56d3b99887233b'
           shellcheck scripts/deploy-development-vm.sh
 
       - name: GCP 인증 (키 파일 없는 WIF)
@@ -108,15 +110,21 @@ jobs:
         env:
           PROJECT_ID: ${{ inputs.gcp_project_id }}
           REMOTE_SCRIPT_NAME: msg-dev-deploy-${{ github.run_id }}-${{ github.run_attempt }}.sh
+          REMOTE_HELPER_NAME: msg-dev-bridge-${{ github.run_id }}-${{ github.run_attempt }}.py
           VM_ZONE: ${{ inputs.vm_zone }}
           VM_NAME: ${{ inputs.vm_name }}
         run: |
           set -Eeuo pipefail
           [[ "$REMOTE_SCRIPT_NAME" =~ ^msg-dev-deploy-[0-9]+-[0-9]+\.sh$ ]]
+          [[ "$REMOTE_HELPER_NAME" =~ ^msg-dev-bridge-[0-9]+-[0-9]+\.py$ ]]
           gcloud compute scp --quiet --tunnel-through-iap \
             --project "$PROJECT_ID" --zone "$VM_ZONE" \
             central-pipeline/scripts/deploy-development-vm.sh \
             "${VM_NAME}:${REMOTE_SCRIPT_NAME}"
+          gcloud compute scp --quiet --tunnel-through-iap \
+            --project "$PROJECT_ID" --zone "$VM_ZONE" \
+            central-pipeline/scripts/backend_proxy_bridge.py \
+            "${VM_NAME}:${REMOTE_HELPER_NAME}"
 
       - name: 정확한 main SHA를 개발 VM에 배포
         shell: bash
@@ -126,11 +134,13 @@ jobs:
           PROJECT_ID: ${{ inputs.gcp_project_id }}
           PUBLIC_DOMAIN: ${{ inputs.public_domain }}
           REMOTE_SCRIPT_NAME: msg-dev-deploy-${{ github.run_id }}-${{ github.run_attempt }}.sh
+          REMOTE_HELPER_NAME: msg-dev-bridge-${{ github.run_id }}-${{ github.run_attempt }}.py
           VM_ZONE: ${{ inputs.vm_zone }}
           VM_NAME: ${{ inputs.vm_name }}
         run: |
           set -Eeuo pipefail
           [[ "$REMOTE_SCRIPT_NAME" =~ ^msg-dev-deploy-[0-9]+-[0-9]+\.sh$ ]]
+          [[ "$REMOTE_HELPER_NAME" =~ ^msg-dev-bridge-[0-9]+-[0-9]+\.py$ ]]
           case "$COMPONENT" in
             backend) repository='MSG-CTF/msg-backend' ;;
             frontend) repository='MSG-CTF/front-team' ;;
@@ -138,7 +148,7 @@ jobs:
           esac
           gcloud compute ssh --quiet --tunnel-through-iap \
             --project "$PROJECT_ID" --zone "$VM_ZONE" "$VM_NAME" --command \
-            "sudo bash '$REMOTE_SCRIPT_NAME' '$COMPONENT' '$repository' '$COMMIT_SHA' '$PUBLIC_DOMAIN' '$GITHUB_RUN_ID'"
+            "sudo bash '$REMOTE_SCRIPT_NAME' '$COMPONENT' '$repository' '$COMMIT_SHA' '$PUBLIC_DOMAIN' '$GITHUB_RUN_ID' '$REMOTE_HELPER_NAME'"
 
       - name: 원격 임시 배포 스크립트 정리
         if: always()
@@ -147,11 +157,13 @@ jobs:
         env:
           PROJECT_ID: ${{ inputs.gcp_project_id }}
           REMOTE_SCRIPT_NAME: msg-dev-deploy-${{ github.run_id }}-${{ github.run_attempt }}.sh
+          REMOTE_HELPER_NAME: msg-dev-bridge-${{ github.run_id }}-${{ github.run_attempt }}.py
           VM_ZONE: ${{ inputs.vm_zone }}
           VM_NAME: ${{ inputs.vm_name }}
         run: |
           set -Eeuo pipefail
           [[ "$REMOTE_SCRIPT_NAME" =~ ^msg-dev-deploy-[0-9]+-[0-9]+\.sh$ ]]
+          [[ "$REMOTE_HELPER_NAME" =~ ^msg-dev-bridge-[0-9]+-[0-9]+\.py$ ]]
           gcloud compute ssh --quiet --tunnel-through-iap \
             --project "$PROJECT_ID" --zone "$VM_ZONE" "$VM_NAME" --command \
-            "rm -f '$REMOTE_SCRIPT_NAME'"
+            "rm -f '$REMOTE_SCRIPT_NAME' '$REMOTE_HELPER_NAME'"
