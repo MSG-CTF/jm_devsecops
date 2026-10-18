@@ -109,3 +109,32 @@ job이 모두 성공한 뒤 위 job이 시작되도록 `needs`를 연결한다. 
   반환한다. 401은 서버 장애가 아니라 “로그인이 필요하다”는 뜻이다.
 - 컨테이너 restart 횟수가 계속 증가하지 않는다.
 
+## OS Login을 바로 쓸 수 없는 VM의 프론트 배포
+
+개발 VM에서 OS Login이 꺼져 있고 배포 서비스 계정에 VM 메타데이터 수정 권한도
+없다면 `reusable-vm-ssh-deploy-dev.yml`을 사용한다. 일반 SSH 계정이나 공용 관리
+키를 재사용하지 않고, 프론트 배포만 허용하는 전용 키와 강제 명령 계정을 둔다.
+
+VM의 authorized_keys에는 다음 형태로 공개키를 등록한다.
+
+```text
+restrict,command="sudo -n /usr/local/sbin/msg-dev-frontend-gateway" ssh-ed25519 <PUBLIC_KEY> github-actions-front-team-development
+```
+
+sudoers에는 이 계정만 `SSH_ORIGINAL_COMMAND`를 보존하고 게이트웨이 하나만 비밀번호
+없이 실행하도록 등록한다.
+
+```text
+Defaults:msgfrontenddeploy env_keep += "SSH_ORIGINAL_COMMAND"
+msgfrontenddeploy ALL=(root) NOPASSWD: /usr/local/sbin/msg-dev-frontend-gateway
+```
+
+게이트웨이는 호출자가 보낸 셸 명령을 실행하지 않는다. 40자리 프론트 커밋,
+GitHub 실행 번호와 설치된 중앙 파이프라인 SHA만 검사하고, root 소유의 고정 배포
+스크립트를 정해진 저장소와 도메인으로 실행한다. 스크립트·설정·도우미 파일은
+root 소유이며 그룹과 기타 사용자에게 쓰기 권한을 주지 않는다.
+
+호출 저장소에는 `DEV_VM_SSH_PRIVATE_KEY`, `DEV_VM_SSH_KNOWN_HOSTS` 두 Repository
+Secret을 등록한다. 전자는 이 강제 명령 계정의 전용 개인키이고, 후자는 미리
+확인한 `msgctf.kr` SSH 호스트 키다.
+
