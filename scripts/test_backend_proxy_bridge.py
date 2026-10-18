@@ -324,23 +324,25 @@ ThreadingHTTPServer(('0.0.0.0',8000),Handler).serve_forever()
                 observations = []
 
                 def observe():
-                    import urllib.request
+                    import http.client
 
                     while not stop.is_set():
+                        connection = http.client.HTTPConnection(frontend_ip, timeout=2)
                         try:
-                            request = urllib.request.Request(
-                                "http://" + frontend_ip + "/healthz",
-                                headers={"Host": "msgctf.kr"},
+                            connection.request(
+                                "GET", "/healthz", headers={"Host": "msgctf.kr"}
                             )
-                            with urllib.request.urlopen(request, timeout=2) as response:
-                                observations.append(
-                                    (
-                                        response.code,
-                                        json.loads(response.read())["version"],
-                                    )
+                            response = connection.getresponse()
+                            observations.append(
+                                (
+                                    response.status,
+                                    json.loads(response.read())["version"],
                                 )
+                            )
                         except Exception as error:
                             observations.append((type(error).__name__, None))
+                        finally:
+                            connection.close()
                         stop.wait(0.025)
 
                 watcher = threading.Thread(target=observe, daemon=True)

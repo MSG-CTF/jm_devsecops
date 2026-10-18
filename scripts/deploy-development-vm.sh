@@ -73,8 +73,11 @@ switched=false
 bridge_active=false
 
 cleanup() {
-  if [[ "$bridge_active" == false ]]; then
+  # The helper persists state before changing Nginx and removes it only after
+  # draining candidate workers. No state means cleanup cannot remove a serving candidate.
+  if [[ "$bridge_active" == false || ! -e "$STATE_DIR/backend-bridge.json" ]]; then
     docker rm -f "$candidate_container" >/dev/null 2>&1 || true
+    rm -f "$STATE_DIR/backend-bridge.nginx.conf"
   else
     echo "전환 상태가 확인되지 않아 서비스 중일 수 있는 후보 컨테이너를 유지합니다." >&2
   fi
