@@ -7,6 +7,7 @@ readonly REPOSITORY="${2:-}"
 readonly COMMIT_SHA="${3:-}"
 readonly PUBLIC_DOMAIN="${4:-}"
 readonly DEPLOYMENT_ID="${5:-manual}"
+readonly BRIDGE_HELPER="${6:-$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/backend_proxy_bridge.py}"
 
 readonly DEPLOY_ROOT="/opt/msg-dev"
 readonly COMPOSE_FILE="${DEPLOY_ROOT}/compose.yml"
@@ -48,6 +49,8 @@ command -v docker >/dev/null
 command -v git >/dev/null
 command -v curl >/dev/null
 command -v flock >/dev/null
+command -v python3 >/dev/null
+test -f "$BRIDGE_HELPER"
 
 mkdir -p "$STATE_DIR" "$BACKUP_DIR"
 exec 9>"/var/lock/msg-dev-deploy.lock"
@@ -55,6 +58,10 @@ flock -w 900 9 || {
   echo "다른 개발 배포가 15분 넘게 실행 중입니다." >&2
   exit 1
 }
+if [[ -e "$STATE_DIR/backend-bridge.json" || -e "$STATE_DIR/backend-bridge.nginx.conf" ]]; then
+  echo "완료되지 않은 백엔드 전환이 있습니다. 후보를 유지하고 관리자 복구를 기다립니다." >&2
+  exit 1
+fi
 
 work_dir="$(mktemp -d "/tmp/msg-dev-${COMPONENT}.XXXXXX")"
 candidate_container="msg-dev-${COMPONENT}-candidate-${DEPLOYMENT_ID}"
@@ -63,9 +70,17 @@ stable_image="msg-dev-${COMPONENT}:latest"
 rollback_image="msg-dev-${COMPONENT}:rollback"
 rollback_available=false
 switched=false
+bridge_active=false
 
 cleanup() {
-  docker rm -f "$candidate_container" >/dev/null 2>&1 || true
+  # The helper persists state before changing Nginx and removes it only after
+  # draining candidate workers. No state means cleanup cannot remove a serving candidate.
+  if [[ "$bridge_active" == false || ! -e "$STATE_DIR/backend-bridge.json" ]]; then
+    docker rm -f "$candidate_container" >/dev/null 2>&1 || true
+    rm -f "$STATE_DIR/backend-bridge.nginx.conf"
+  else
+    echo "전환 상태가 확인되지 않아 서비스 중일 수 있는 후보 컨테이너를 유지합니다." >&2
+  fi
   rm -rf "$work_dir"
 }
 trap cleanup EXIT
@@ -75,8 +90,8 @@ compose() {
     --file "$COMPOSE_FILE" --env-file "$ENV_FILE" "$@"
 }
 
-# 10GB 개발 VM에서 배포할 때마다 후보·롤백 태그와 BuildKit 캐시가 계속
-# 쌓이지 않게 한다. 실행 중인 latest 이미지와 DB/Redis 볼륨은 건드리지 않는다.
+# 이 파이프라인이 만든 후보·롤백 이미지 태그만 정리한다.
+# 공용 호스트의 다른 빌드 캐시와 이미지, DB/Redis 볼륨은 정리하지 않는다.
 prune_deployment_artifacts() {
   local stale_image
 
@@ -90,9 +105,10 @@ prune_deployment_artifacts() {
       --format '{{.Repository}}:{{.Tag}}')
   done
 
-  docker image prune --force >/dev/null 2>&1 || true
-  docker builder prune --all --force \
-    --max-used-space 1GB --min-free-space 2GB >/dev/null 2>&1 || true
+}
+
+bridge() {
+  python3 "$BRIDGE_HELPER" "$@" --domain "$PUBLIC_DOMAIN"
 }
 
 # 로그인하지 않은 API 점검은 정상적으로 401을 돌려줄 수 있다. 연결 성공은
@@ -108,20 +124,45 @@ assert_api_reachable() {
 
 rollback_service() {
   if [[ "$switched" == true && "$rollback_available" == true ]]; then
+    if [[ "$COMPONENT" == backend ]]; then
+      bridge_active=true
+      if [[ -f "$STATE_DIR/backend-bridge.json" ]]; then
+        # A failed finish may already have routed some requests to the primary.
+        bridge hold --container "$candidate_container" || return 1
+      else
+        local frontend
+        frontend="$(compose ps -q frontend)" || return 1
+        bridge begin --container "$candidate_container" --frontend "$frontend" || return 1
+      fi
+    fi
     echo "검증 실패: 이전 ${COMPONENT} 이미지로 되돌립니다." >&2
-    docker image tag "$rollback_image" "$stable_image"
-    compose up -d --no-deps --force-recreate "$COMPONENT"
+    docker image tag "$rollback_image" "$stable_image" || return 1
+    compose up -d --no-deps --force-recreate "$COMPONENT" || return 1
+    if [[ "$COMPONENT" == backend ]]; then
+      local primary
+      primary="$(compose ps -q backend)" || return 1
+      bridge ready --container "$primary" || return 1
+    fi
+  fi
+  if [[ "$bridge_active" == true ]]; then
+    local primary
+    primary="$(compose ps -q backend)" || return 1
+    bridge finish --container "$primary" || return 1
+    bridge_active=false
   fi
 }
 
 on_error() {
   local exit_code=$?
-  rollback_service || true
+  trap - ERR INT TERM HUP
+  rollback_service || echo "롤백 검증 실패: 후보 컨테이너와 전환 기록을 유지합니다." >&2
   exit "$exit_code"
 }
 trap on_error ERR
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
 
-echo "[준비] 오래된 배포 이미지와 빌드 캐시 정리"
+echo "[준비] 이 구성요소의 오래된 배포 이미지 태그 정리"
 prune_deployment_artifacts
 
 echo "[1/7] 정확한 ${REPOSITORY}@${COMMIT_SHA} 가져오기"
@@ -155,6 +196,7 @@ if [[ "$COMPONENT" == backend ]]; then
     "$candidate_image" python manage.py check --deploy --fail-level WARNING
 
   docker run -d --name "$candidate_container" --network "$DOCKER_NETWORK" \
+    --memory 768m --cpus 1 --pids-limit 128 \
     --env-file "$ENV_FILE" -p 127.0.0.1::8000 "$candidate_image" >/dev/null
   candidate_port="$(docker port "$candidate_container" 8000/tcp | awk -F: 'NR == 1 {print $NF}')"
   for _ in {1..30}; do
@@ -185,7 +227,9 @@ else
     -H "Host: $PUBLIC_DOMAIN" -H 'X-Forwarded-Proto: https' \
     "http://127.0.0.1:${candidate_port}/api/v1/auth/me"
 fi
-docker rm -f "$candidate_container" >/dev/null
+if [[ "$COMPONENT" != backend ]]; then
+  docker rm -f "$candidate_container" >/dev/null
+fi
 
 if [[ "$COMPONENT" == backend ]]; then
   echo "[4/7] PostgreSQL 백업 후 migration"
@@ -202,6 +246,14 @@ else
   echo "[4/7] 프론트엔드는 DB migration 없음"
 fi
 
+if [[ "$COMPONENT" == backend ]]; then
+  echo "[전환 준비] DB·Redis와 인증 API 검증 후 후보로 요청 전달"
+  frontend_container="$(compose ps -q frontend)"
+  # begin이 일부만 진행돼도 EXIT에서 서비스 중인 후보를 제거하지 않는다.
+  bridge_active=true
+  bridge begin --container "$candidate_container" --frontend "$frontend_container"
+fi
+
 echo "[5/7] 현재 이미지 보관 후 후보 이미지로 교체"
 current_container="$(compose ps -q "$COMPONENT")"
 if [[ -n "$current_container" ]]; then
@@ -212,6 +264,10 @@ fi
 docker image tag "$candidate_image" "$stable_image"
 switched=true
 compose up -d --no-deps --force-recreate "$COMPONENT"
+if [[ "$COMPONENT" == backend ]]; then
+  primary_container="$(compose ps -q backend)"
+  bridge ready --container "$primary_container"
+fi
 
 echo "[6/7] 교체된 서비스와 외부 HTTPS 검사"
 for _ in {1..30}; do
@@ -235,6 +291,14 @@ assert_api_reachable \
   http://127.0.0.1:8080/api/v1/auth/me
 curl --fail --silent --show-error --output /dev/null "https://${PUBLIC_DOMAIN}/"
 assert_api_reachable "https://${PUBLIC_DOMAIN}/api/v1/auth/me"
+if [[ "$COMPONENT" == backend ]]; then
+  # finish reloads Nginx with the new Docker DNS address and drains old workers
+  # before the candidate may be deleted, including after rollback.
+  bridge finish --container "$primary_container"
+  bridge_active=false
+  curl --fail --silent --show-error --output /dev/null "https://${PUBLIC_DOMAIN}/healthz"
+  assert_api_reachable "https://${PUBLIC_DOMAIN}/api/v1/auth/me"
+fi
 
 echo "[7/7] 성공한 SHA 기록"
 printf '%s\n' "$COMMIT_SHA" >"${STATE_DIR}/${COMPONENT}.sha"
