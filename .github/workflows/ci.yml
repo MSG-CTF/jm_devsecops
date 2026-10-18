@@ -34,6 +34,9 @@ jobs:
           MSG_BRIDGE_DOCKER_TESTS: '1'
         run: python3 -m unittest discover -s scripts -p 'test_backend_proxy_bridge.py' -v
 
+      - name: 제한된 SSH 배포 명령 검증
+        run: python3 -m unittest scripts/test_development_vm_ssh_gateway.py -v
+
       - name: 배포 스크립트 무결성 값 일치 확인
         run: |
           set -Eeuo pipefail
