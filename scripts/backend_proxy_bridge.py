@@ -110,6 +110,27 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+def candidate_config(config, address):
+    """Route only the known backend upstream, retaining URI and auth directives."""
+    literal = rb"(\bproxy_pass\s+)http://backend:8000(?=[/;])"
+    variable = rb'(?m)^(\s*set\s+\$backend_url\s+)"http://backend:8000"(\s*;\s*)$'
+    dynamic_proxy = rb"\bproxy_pass\s+\$backend_url\$request_uri\s*;"
+    literal_count = len(re.findall(literal, config))
+    variable_count = len(re.findall(variable, config))
+    definitions = len(re.findall(rb"\bset\s+\$backend_url\s", config))
+    dynamic_count = len(re.findall(dynamic_proxy, config))
+    if b"location = /healthz" not in config:
+        raise BridgeError("Expected the backend API and health proxy routes")
+    target = b"http://" + address.encode() + b":8000"
+    if literal_count >= 2 and variable_count == dynamic_count == 0:
+        return re.sub(literal, lambda match: match[1] + target, config)
+    if variable_count == definitions == 1 and dynamic_count >= 2 and literal_count == 0:
+        return re.sub(
+            variable, lambda match: match[1] + b'"' + target + b'"' + match[2], config
+        )
+    raise BridgeError("Expected the backend API and health proxy routes")
+
+
 class Bridge:
     def __init__(self, state_dir, docker, wait=75, sleep=time.sleep):
         self.state_dir = Path(state_dir)
@@ -170,15 +191,11 @@ class Bridge:
     def begin(self, candidate, frontend):
         if self.state.exists() or self.backup.exists():
             raise BridgeError("An unfinished backend bridge needs operator recovery")
-        candidate_id, _ = self.docker.identity(candidate)
+        candidate_id, address = self.docker.identity(candidate)
         frontend_id, _ = self.docker.identity(frontend)
         self.ready(candidate_id)
         config = self.docker.read_config(frontend_id)
-        # Only replace literal proxy_pass destinations, preserving paths and auth
-        pattern = rb"(\bproxy_pass\s+)http://backend:8000(?=[/;])"
-        _, count = re.subn(pattern, b"", config)
-        if count < 2 or b"location = /healthz" not in config:
-            raise BridgeError("Expected the backend API and health proxy routes")
+        candidate_config(config, address)
         self.state_dir.mkdir(parents=True, mode=0o700, exist_ok=True)
         with self.backup.open("xb") as file:
             file.write(config)
@@ -196,11 +213,7 @@ class Bridge:
         value = self.load()
         address = self.ready(value["candidate"])
         config = self.backup.read_bytes()
-        routed = re.sub(
-            rb"(\bproxy_pass\s+)http://backend:8000(?=[/;])",
-            lambda m: m[1] + b"http://" + address.encode() + b":8000",
-            config,
-        )
+        routed = candidate_config(config, address)
         self.route(value, routed)
         value["phase"] = "serving"
         self.save(value)
