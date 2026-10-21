@@ -92,7 +92,7 @@ jobs:
           test "$(sha256sum scripts/deploy-development-vm.sh | awk '{print $1}')" = \
             'e9cc3ac655e1cb8449bba987fe916018eadc55192bbe036b86f6d7ae38a9a65f'
           test "$(sha256sum scripts/backend_proxy_bridge.py | awk '{print $1}')" = \
-            'e4d8c8b0b19114a3c5f818002043df01a9ee0062d65a99474d56d3b99887233b'
+            '7c4e4288370ab962b77a3e1c5a19a5b70998e60b50a8cf85fef418f2b02960c7'
           shellcheck scripts/deploy-development-vm.sh
 
       - name: GCP 인증 (키 파일 없는 WIF)

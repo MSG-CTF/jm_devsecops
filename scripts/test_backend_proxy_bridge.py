@@ -1,4 +1,5 @@
 import json
+import http.client
 import os
 from pathlib import Path
 import subprocess
@@ -19,6 +20,22 @@ CONFIG = b"""server {
  location /api/v1/ { proxy_pass http://backend:8000/api/v1/; }
  location = /internal/v1/runtime-secrets/resolve {
   proxy_pass http://backend:8000/internal/v1/runtime-secrets/resolve;
+  allow 34.9.255.41; deny all;
+ }
+}
+"""
+
+DYNAMIC_CONFIG = b"""server {
+ listen 80;
+ resolver 127.0.0.11 valid=5s ipv6=off;
+ set $backend_url "http://backend:8000";
+ location = /healthz { proxy_pass $backend_url$request_uri; }
+ location /api/v1/ {
+  proxy_pass $backend_url$request_uri;
+  proxy_set_header Authorization $http_authorization;
+ }
+ location = /internal/v1/runtime-secrets/resolve {
+  proxy_pass $backend_url$request_uri;
   allow 34.9.255.41; deny all;
  }
 }
@@ -158,6 +175,41 @@ class BridgeTests(unittest.TestCase):
             self.bridge.begin("candidate", "frontend")
         self.assertEqual(self.docker.reloads, 0)
 
+    def test_dynamic_dns_routes_candidate_and_restores_original_config(self):
+        self.docker.config = DYNAMIC_CONFIG
+        self.bridge.begin("candidate", "frontend")
+        expected = DYNAMIC_CONFIG.replace(
+            b'"http://backend:8000"', b'"http://172.18.0.3:8000"'
+        )
+        self.assertEqual(self.docker.config, expected)
+        self.bridge.hold()
+        self.assertEqual(self.docker.config, expected)
+        self.bridge.finish("primary")
+        self.assertEqual(self.docker.config, DYNAMIC_CONFIG)
+        self.assertFalse(self.bridge.state.exists())
+
+    def test_unknown_or_mixed_dynamic_upstreams_fail_before_proxy_mutation(self):
+        for config in (
+            DYNAMIC_CONFIG.replace(b"http://backend:8000", b"http://other:8000"),
+            DYNAMIC_CONFIG.replace(
+                b"listen 80;", b'listen 80;\n set $backend_url "http://other:8000";'
+            ),
+            DYNAMIC_CONFIG.replace(b"$backend_url$request_uri", b"$backend_url"),
+            DYNAMIC_CONFIG.replace(
+                b"listen 80;", b'listen 80;\n set $backend_url "http://backend:8000";'
+            ),
+            DYNAMIC_CONFIG.replace(
+                b"proxy_pass $backend_url$request_uri;",
+                b"proxy_pass http://backend:8000/;",
+                1,
+            ),
+        ):
+            with self.subTest(config=config), self.assertRaises(BridgeError):
+                self.docker.config = config
+                self.bridge.begin("candidate", "frontend")
+            self.assertEqual(self.docker.reloads, 0)
+            self.assertFalse(self.bridge.state.exists())
+
 
 class ContractTests(unittest.TestCase):
     def test_real_http_requires_health_components_json_and_auth_boundary(self):
@@ -223,6 +275,12 @@ class ContractTests(unittest.TestCase):
 )
 class RealDockerTests(unittest.TestCase):
     def test_real_nginx_serves_candidate_during_primary_recreation_and_rollback(self):
+        self.exercise_cutover(CONFIG)
+
+    def test_real_dynamic_dns_nginx_preserves_uri_during_recreation_and_rollback(self):
+        self.exercise_cutover(DYNAMIC_CONFIG)
+
+    def exercise_cutover(self, configuration):
         suffix = uuid.uuid4().hex[:12]
         prefix = "msg-bridge-test-" + suffix
         containers = []
@@ -239,7 +297,7 @@ class RealDockerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             config = root / "default.conf"
-            config.write_bytes(CONFIG)
+            config.write_bytes(configuration)
             app = root / "app.py"
             app.write_text(
                 """import json,os
@@ -248,7 +306,7 @@ class Handler(BaseHTTPRequestHandler):
  def do_GET(self):
   self.send_response(200 if self.path=='/healthz' else 401)
   self.send_header('Content-Type','application/json'); self.end_headers()
-  self.wfile.write(json.dumps({'status':'ok','database':'ok','cache':'ok','version':os.environ['VERSION']}).encode())
+  self.wfile.write(json.dumps({'status':'ok','database':'ok','cache':'ok','version':os.environ['VERSION'],'request_path':self.path}).encode())
  def log_message(self,*args):pass
 ThreadingHTTPServer(('0.0.0.0',8000),Handler).serve_forever()
 """
@@ -349,6 +407,17 @@ ThreadingHTTPServer(('0.0.0.0',8000),Handler).serve_forever()
                 watcher.start()
                 try:
                     bridge.begin(candidate, frontend_id)
+                    connection = http.client.HTTPConnection(frontend_ip, timeout=3)
+                    path = "/api/v1/auth/me?next=%2Fboard&request=retry"
+                    try:
+                        connection.request("GET", path, headers={"Host": "msgctf.kr"})
+                        response = connection.getresponse()
+                        self.assertEqual(response.status, 401)
+                        self.assertEqual(
+                            json.loads(response.read())["request_path"], path
+                        )
+                    finally:
+                        connection.close()
                     run("rm", "-f", primary)
                     time.sleep(0.5)
                     backend(primary, "new", primary=True)
