@@ -97,7 +97,8 @@ Baseline 검사는 SQL injection 같은 공격 요청을 적극적으로 보내�
 | `DEV_MIGRATION_POSTGRES_USER` | schema 변경만 허용할 별도 사용자. 예: `msg_migrator` |
 | `DEV_POSTGRES_HOST` | 자체 운영 PostgreSQL의 고정 사설 IP 또는 내부 DNS |
 | `DEV_REDIS_SECRET_VERSION` | `redis-url-dev`의 숫자 version |
-| `DEV_SCHEDULER_BASE_URL` | 경로가 없는 실제 개발 Scheduler origin |
+| `DEV_SCHEDULER_BASE_URL` | 인증정보·경로·쿼리가 없는 실제 개발 Scheduler HTTPS origin |
+| `DEV_SCHEDULER_TOKEN_SECRET_VERSION` | `scheduler-api-token-dev`의 숫자 version |
 | `DEV_DJANGO_SECRET_VERSION` | `django-secret-key-dev`의 숫자 version |
 | `DEV_JWT_SECRET_VERSION` | `jwt-secret-dev`의 숫자 version |
 | `DEV_POSTGRES_PASSWORD_SECRET_VERSION` | `postgres-password-dev`의 숫자 version |
@@ -130,6 +131,7 @@ https://msg-scheduler-dev-269174025178.asia-northeast3.run.app
 - PostgreSQL password
 - migration PostgreSQL password
 - 인증정보를 포함한 Redis URL
+- Scheduler API token
 - KOTH team token secret
 
 실제 값은 GCP Secret Manager에 있고 GitHub에는 숫자 version만 기록한다.

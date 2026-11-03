@@ -93,7 +93,16 @@ on:
         default: "5432"
         type: string
       scheduler_base_url:
-        description: 경로가 없는 개발 Scheduler http/https origin
+        description: 경로가 없는 개발 Scheduler HTTPS origin
+        required: true
+        type: string
+      scheduler_token_secret_id:
+        description: Scheduler API token Secret Manager secret ID
+        required: false
+        default: scheduler-api-token-dev
+        type: string
+      scheduler_token_secret_version:
+        description: Scheduler API token의 숫자 Secret version
         required: true
         type: string
       django_secret_id:
@@ -207,6 +216,8 @@ jobs:
       POSTGRES_HOST: ${{ inputs.postgres_host }}
       POSTGRES_PORT: ${{ inputs.postgres_port }}
       SCHEDULER_BASE_URL: ${{ inputs.scheduler_base_url }}
+      SCHEDULER_TOKEN_SECRET_ID: ${{ inputs.scheduler_token_secret_id }}
+      SCHEDULER_TOKEN_SECRET_VERSION: ${{ inputs.scheduler_token_secret_version }}
       DJANGO_SECRET_ID: ${{ inputs.django_secret_id }}
       DJANGO_SECRET_VERSION: ${{ inputs.django_secret_version }}
       JWT_SECRET_ID: ${{ inputs.jwt_secret_id }}
@@ -253,6 +264,7 @@ jobs:
             "$POSTGRES_PASSWORD_SECRET_ID" \
             "$MIGRATION_POSTGRES_PASSWORD_SECRET_ID" \
             "$REDIS_SECRET_ID" \
+            "$SCHEDULER_TOKEN_SECRET_ID" \
             "$KOTH_SECRET_ID"
           do
             [[ "$value" =~ ^[a-z][a-z0-9._-]{0,62}$ ]] || {
@@ -296,10 +308,24 @@ jobs:
             echo "postgres_port 형식이 올바르지 않습니다."
             exit 1
           }
-          [[ "$SCHEDULER_BASE_URL" =~ ^https?://[^/[:space:]]+/?$ ]] || {
-            echo "scheduler_base_url은 경로가 없는 http/https origin이어야 합니다."
+          [[ "$SCHEDULER_BASE_URL" =~ ^https://[^/[:space:]]+/?$ ]] || {
+            echo "scheduler_base_url은 경로가 없는 HTTPS origin이어야 합니다."
             exit 1
           }
+          python3 - <<'PY'
+          import os
+          from urllib.parse import urlsplit
+          try:
+              endpoint = urlsplit(os.environ["SCHEDULER_BASE_URL"])
+              endpoint.port
+              valid = (endpoint.scheme == "https" and bool(endpoint.hostname)
+                       and endpoint.username is None and endpoint.password is None
+                       and endpoint.path in ("", "/") and not endpoint.query and not endpoint.fragment)
+          except ValueError:
+              valid = False
+          if not valid:
+              raise SystemExit("scheduler_base_url은 인증정보·경로·쿼리가 없는 HTTPS origin이어야 합니다")
+          PY
           if [[ "$SMOKE_TEST_PATH" != /* ||
                 "$SMOKE_TEST_PATH" == *"?"* ||
                 "$SMOKE_TEST_PATH" == *"#"* ||
@@ -327,6 +353,7 @@ jobs:
             "$POSTGRES_PASSWORD_SECRET_VERSION" \
             "$MIGRATION_POSTGRES_PASSWORD_SECRET_VERSION" \
             "$REDIS_SECRET_VERSION" \
+            "$SCHEDULER_TOKEN_SECRET_VERSION" \
             "$KOTH_SECRET_VERSION"
           do
             [[ "$version" =~ ^[1-9][0-9]*$ ]] || {
@@ -363,6 +390,7 @@ jobs:
             "$POSTGRES_PASSWORD_SECRET_ID:$POSTGRES_PASSWORD_SECRET_VERSION" \
             "$MIGRATION_POSTGRES_PASSWORD_SECRET_ID:$MIGRATION_POSTGRES_PASSWORD_SECRET_VERSION" \
             "$REDIS_SECRET_ID:$REDIS_SECRET_VERSION" \
+            "$SCHEDULER_TOKEN_SECRET_ID:$SCHEDULER_TOKEN_SECRET_VERSION" \
             "$KOTH_SECRET_ID:$KOTH_SECRET_VERSION"
           do
             secret_id="${item%%:*}"
@@ -435,6 +463,7 @@ jobs:
           backend_secrets+=",JWT_SECRET=${JWT_SECRET_ID}:${JWT_SECRET_VERSION}"
           backend_secrets+=",POSTGRES_PASSWORD=${POSTGRES_PASSWORD_SECRET_ID}:${POSTGRES_PASSWORD_SECRET_VERSION}"
           backend_secrets+=",REDIS_URL=${REDIS_SECRET_ID}:${REDIS_SECRET_VERSION}"
+          backend_secrets+=",SCHEDULER_API_TOKEN=${SCHEDULER_TOKEN_SECRET_ID}:${SCHEDULER_TOKEN_SECRET_VERSION}"
           backend_secrets+=",KOTH_TEAM_TOKEN_SECRET=${KOTH_SECRET_ID}:${KOTH_SECRET_VERSION}"
           echo "backend_secrets=${backend_secrets}" >> "$GITHUB_ENV"
 
@@ -697,6 +726,7 @@ jobs:
 
       - name: 모든 후보 검사가 성공한 revision에만 100% traffic 전환
         id: promote
+        continue-on-error: true
         if: >-
           steps.smoke.outcome == 'success' &&
           steps.runtime-dependencies.outcome == 'success' &&
@@ -708,15 +738,53 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          echo "attempted=true" >> "$GITHUB_OUTPUT"
           gcloud run services update-traffic "$CLOUD_RUN_SERVICE" \
             --project="$PROJECT_ID" \
             --region="$REGION" \
             --to-revisions="${NEW_REVISION}=100" \
             --quiet
 
+      - name: 전환 응답과 관계없이 실제 traffic 확인
+        id: promotion-state
+        if: always() && !cancelled() && steps.promote.outputs.attempted == 'true'
+        continue-on-error: true
+        env:
+          NEW_REVISION: ${{ steps.deployed.outputs.revision_name }}
+          PREVIOUS_REVISION: ${{ steps.previous.outputs.revision }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          state=unknown
+          for attempt in {1..3}; do
+            if current="$(gcloud run services describe "$CLOUD_RUN_SERVICE" \
+              --project="$PROJECT_ID" --region="$REGION" --format=json)"; then
+              state="$(jq -r --arg target "$NEW_REVISION" --arg previous "$PREVIOUS_REVISION" '
+                if (.status.traffic | type) != "array" then "unknown"
+                else [.status.traffic[] | select((.percent // 0) > 0)] as $active |
+                  if ($active | map(.percent) | add) != 100 then "unknown"
+                  elif all($active[]; .revisionName == $target) then "new"
+                  elif all($active[]; .revisionName == $previous) then "previous"
+                  elif all($active[]; .revisionName == $target or .revisionName == $previous) then "partial"
+                  else "other" end
+                end' <<< "$current" 2>/dev/null)" || state=unknown
+              if [[ "$state" != unknown ]]; then
+                break
+              fi
+            fi
+            if [[ "$attempt" -lt 3 ]]; then sleep 3; fi
+          done
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+          if [[ "$state" == new ]]; then
+            echo "새 revision의 실제 traffic 100%를 확인했습니다"
+            exit 0
+          fi
+          echo "traffic 전환을 확인하지 못했습니다: $state"
+          exit 1
+
       - name: traffic 전환 후 공개 URL smoke test
         id: post-promote-smoke
-        if: steps.promote.outcome == 'success'
+        if: always() && !cancelled() && steps.promotion-state.outcome == 'success'
         continue-on-error: true
         env:
           SERVICE_URL: ${{ steps.deployed.outputs.service_url }}
@@ -736,19 +804,36 @@ jobs:
       - name: traffic 전환 후 실패 시 직전 revision으로 rollback
         if: >-
           always() && !cancelled() &&
-          steps.post-promote-smoke.outcome == 'failure' &&
-          steps.previous.outputs.revision != ''
+          steps.previous.outputs.revision != '' &&
+          (steps.post-promote-smoke.outcome == 'failure' ||
+           steps.promotion-state.outputs.state == 'partial')
         env:
           PREVIOUS_REVISION: ${{ steps.previous.outputs.revision }}
         shell: bash
         run: |
           set -euo pipefail
           echo "직전 revision ${PREVIOUS_REVISION}(으)로 traffic을 되돌립니다."
-          gcloud run services update-traffic "$CLOUD_RUN_SERVICE" \
+          if ! gcloud run services update-traffic "$CLOUD_RUN_SERVICE" \
             --project="$PROJECT_ID" \
             --region="$REGION" \
             --to-revisions="${PREVIOUS_REVISION}=100" \
-            --quiet
+            --quiet; then
+            echo "rollback 응답을 받지 못해 실제 traffic을 확인합니다"
+          fi
+          for attempt in {1..3}; do
+            if current="$(gcloud run services describe "$CLOUD_RUN_SERVICE" \
+              --project="$PROJECT_ID" --region="$REGION" --format=json)" &&
+              jq -e --arg previous "$PREVIOUS_REVISION" '
+                [.status.traffic[] | select((.percent // 0) > 0)] as $active |
+                ($active | map(.percent) | add) == 100 and
+                all($active[]; .revisionName == $previous)' <<< "$current" >/dev/null 2>&1; then
+              echo "직전 revision의 실제 traffic 100%를 확인했습니다"
+              exit 0
+            fi
+            if [[ "$attempt" -lt 3 ]]; then sleep 3; fi
+          done
+          echo "rollback 결과를 확인하지 못했습니다 운영 상태를 확인해주세요"
+          exit 1
 
       - name: 후보 tag 정리
         if: always() && env.CANDIDATE_TAG != ''
@@ -768,7 +853,7 @@ jobs:
            steps.dast-coverage.outcome == 'failure' ||
            steps.dast.outcome == 'failure' ||
            steps.zap-artifact.outcome == 'failure' ||
-           steps.promote.outcome != 'success' ||
+           steps.promotion-state.outcome != 'success' ||
            steps.post-promote-smoke.outcome == 'failure')
         run: |
           echo "후보 검사, DAST 보고서, traffic 전환 중 하나가 실패했습니다."

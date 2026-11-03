@@ -86,6 +86,8 @@ jobs:
       postgres_host: ${{ vars.DEV_POSTGRES_HOST }}
       postgres_port: "5432"
       scheduler_base_url: ${{ vars.DEV_SCHEDULER_BASE_URL }}
+      scheduler_token_secret_id: scheduler-api-token-dev
+      scheduler_token_secret_version: ${{ vars.DEV_SCHEDULER_TOKEN_SECRET_VERSION }}
       django_secret_id: django-secret-key-dev
       django_secret_version: ${{ vars.DEV_DJANGO_SECRET_VERSION }}
       jwt_secret_id: jwt-secret-dev

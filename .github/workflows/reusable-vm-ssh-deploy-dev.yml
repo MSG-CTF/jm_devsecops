@@ -1,0 +1,105 @@
+name: Reusable Development VM SSH Deploy
+
+on:
+  workflow_call:
+    inputs:
+      commit_sha:
+        description: 호출 저장소 main의 정확한 40자리 commit SHA
+        required: true
+        type: string
+      pipeline_ref:
+        description: 이 워크플로가 포함된 중앙 저장소 commit SHA
+        required: true
+        type: string
+      ssh_host:
+        description: 개발 VM SSH 호스트
+        required: false
+        default: msgctf.kr
+        type: string
+      ssh_user:
+        description: 제한된 프론트 배포 계정
+        required: false
+        default: msgfrontenddeploy
+        type: string
+    secrets:
+      vm_ssh_private_key:
+        description: 제한된 프론트 배포 전용 SSH 개인키
+        required: true
+      vm_ssh_known_hosts:
+        description: 개발 VM의 고정 known_hosts 항목
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: development-vm-msgctf
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: deploy-frontend
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: development
+    permissions:
+      contents: read
+    steps:
+      - name: 호출 저장소와 입력값 검증
+        shell: bash
+        env:
+          COMMIT_SHA: ${{ inputs.commit_sha }}
+          PIPELINE_REF: ${{ inputs.pipeline_ref }}
+          SSH_HOST: ${{ inputs.ssh_host }}
+          SSH_USER: ${{ inputs.ssh_user }}
+        run: |
+          set -Eeuo pipefail
+          test "$GITHUB_REPOSITORY" = 'MSG-CTF/front-team'
+          test "$GITHUB_REF" = 'refs/heads/main'
+          test "$COMMIT_SHA" = "$GITHUB_SHA"
+          [[ "$COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$PIPELINE_REF" =~ ^[0-9a-f]{40}$ ]]
+          test "$SSH_HOST" = 'msgctf.kr'
+          test "$SSH_USER" = 'msgfrontenddeploy'
+
+      - name: 제한된 SSH 키 준비
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.vm_ssh_private_key }}
+          SSH_KNOWN_HOSTS: ${{ secrets.vm_ssh_known_hosts }}
+          SSH_HOST: ${{ inputs.ssh_host }}
+        run: |
+          set -Eeuo pipefail
+          install -d -m 0700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > "$HOME/.ssh/msg-dev-frontend"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" | tr -d '\r' > "$HOME/.ssh/known_hosts"
+          chmod 0600 "$HOME/.ssh/msg-dev-frontend" "$HOME/.ssh/known_hosts"
+          ssh-keygen -y -f "$HOME/.ssh/msg-dev-frontend" >/dev/null
+          ssh-keygen -F "$SSH_HOST" -f "$HOME/.ssh/known_hosts" >/dev/null
+
+      - name: 정확한 main SHA를 개발 VM에 배포
+        shell: bash
+        env:
+          COMMIT_SHA: ${{ inputs.commit_sha }}
+          PIPELINE_REF: ${{ inputs.pipeline_ref }}
+          SSH_HOST: ${{ inputs.ssh_host }}
+          SSH_USER: ${{ inputs.ssh_user }}
+        run: |
+          set -Eeuo pipefail
+          run_id="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          [[ "$run_id" =~ ^[0-9]+-[0-9]+$ ]]
+          ssh -i "$HOME/.ssh/msg-dev-frontend" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            -o ConnectTimeout=10 \
+            -o ServerAliveInterval=15 \
+            -o ServerAliveCountMax=4 \
+            "$SSH_USER@$SSH_HOST" \
+            "deploy-frontend $COMMIT_SHA $run_id $PIPELINE_REF"
+
+      - name: SSH 개인키 정리
+        if: always()
+        shell: bash
+        run: rm -f "$HOME/.ssh/msg-dev-frontend"
