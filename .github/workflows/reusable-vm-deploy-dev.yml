@@ -90,7 +90,7 @@ jobs:
           set -Eeuo pipefail
           cd central-pipeline
           test "$(sha256sum scripts/deploy-development-vm.sh | awk '{print $1}')" = \
-            'e9cc3ac655e1cb8449bba987fe916018eadc55192bbe036b86f6d7ae38a9a65f'
+            '8f12b690e826ec50243108bb8dbc35a6477c7cbe96435c3657538ba141e2aa1e'
           test "$(sha256sum scripts/backend_proxy_bridge.py | awk '{print $1}')" = \
             '7c4e4288370ab962b77a3e1c5a19a5b70998e60b50a8cf85fef418f2b02960c7'
           shellcheck scripts/deploy-development-vm.sh
