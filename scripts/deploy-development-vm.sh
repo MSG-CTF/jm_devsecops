@@ -48,8 +48,8 @@ done
 backend_security_args=()
 if [[ "$COMPONENT" == backend && -f /run/msgctf-secrets/backend.env ]]; then
   backend_security_args=(
-    --mount type=bind,src=/run/msgctf-secrets,dst=/run/msgctf-secrets,readonly
-    --mount type=bind,src=/etc/msgctf-security/trust,dst=/run/msgctf-trust,readonly
+    --mount "type=bind,src=/run/msgctf-secrets,dst=/run/msgctf-secrets,readonly"
+    --mount "type=bind,src=/etc/msgctf-security/trust,dst=/run/msgctf-trust,readonly"
   )
 fi
 
@@ -254,9 +254,11 @@ if [[ "$COMPONENT" == backend ]]; then
   if [[ -f /etc/msgctf-security/enforced ]]; then
     backup_file="${backup_file}.age"
     # Only the public recipient is available on this host.
+    # shellcheck disable=SC2016 # Variables expand inside the PostgreSQL container
     compose exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' | gzip -9 | \
       python3 /usr/local/lib/msgctf-security/encrypt_backup.py "$backup_file"
   else
+    # shellcheck disable=SC2016 # Variables expand inside the PostgreSQL container
     compose exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' | gzip -9 >"$backup_file"
   fi
   test -s "$backup_file"
