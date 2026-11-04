@@ -45,6 +45,14 @@ for required_file in "$COMPOSE_FILE" "$ENV_FILE"; do
   }
 done
 
+backend_security_args=()
+if [[ "$COMPONENT" == backend && -f /run/msgctf-secrets/backend.env ]]; then
+  backend_security_args=(
+    --mount type=bind,src=/run/msgctf-secrets,dst=/run/msgctf-secrets,readonly
+    --mount type=bind,src=/etc/msgctf-security/trust,dst=/run/msgctf-trust,readonly
+  )
+fi
+
 command -v docker >/dev/null
 command -v git >/dev/null
 command -v curl >/dev/null
@@ -180,6 +188,15 @@ test -f "$work_dir/Dockerfile" || {
   exit 1
 }
 
+if [[ "$COMPONENT" == backend && -f /etc/msgctf-security/enforced ]]; then
+  python3 - "$work_dir/deploy/security/security-generation.json" <<'PYSEC'
+import json, pathlib, sys
+p = pathlib.Path(sys.argv[1])
+if not p.is_file() or json.loads(p.read_text()).get("generation", 0) < 1:
+    raise SystemExit("Backend security generation would be rolled back")
+PYSEC
+fi
+
 echo "[2/7] 후보 이미지 빌드"
 docker build --pull --tag "$candidate_image" "$work_dir"
 image_user="$(docker image inspect --format '{{.Config.User}}' "$candidate_image")"
@@ -192,12 +209,12 @@ esac
 
 echo "[3/7] 후보 컨테이너 사전 검사"
 if [[ "$COMPONENT" == backend ]]; then
-  docker run --rm --network "$DOCKER_NETWORK" --env-file "$ENV_FILE" \
+  docker run --rm --network "$DOCKER_NETWORK" --env-file "$ENV_FILE" "${backend_security_args[@]}" \
     "$candidate_image" python manage.py check --deploy --fail-level WARNING
 
   docker run -d --name "$candidate_container" --network "$DOCKER_NETWORK" \
     --memory 768m --cpus 1 --pids-limit 128 \
-    --env-file "$ENV_FILE" -p 127.0.0.1::8000 "$candidate_image" >/dev/null
+    --env-file "$ENV_FILE" "${backend_security_args[@]}" -p 127.0.0.1::8000 "$candidate_image" >/dev/null
   candidate_port="$(docker port "$candidate_container" 8000/tcp | awk -F: 'NR == 1 {print $NF}')"
   for _ in {1..30}; do
     if curl --fail --silent --show-error --output /dev/null \
@@ -234,13 +251,18 @@ fi
 if [[ "$COMPONENT" == backend ]]; then
   echo "[4/7] PostgreSQL 백업 후 migration"
   backup_file="${BACKUP_DIR}/pre-backend-${COMMIT_SHA:0:12}-$(date -u +%Y%m%dT%H%M%SZ).sql.gz"
-  # 이 변수들은 호스트가 아니라 PostgreSQL 컨테이너 안에서 확장되어야 한다.
-  # shellcheck disable=SC2016
-  compose exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' | gzip -9 >"$backup_file"
+  if [[ -f /etc/msgctf-security/enforced ]]; then
+    backup_file="${backup_file}.age"
+    # Only the public recipient is available on this host.
+    compose exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' | gzip -9 | \
+      python3 /usr/local/lib/msgctf-security/encrypt_backup.py "$backup_file"
+  else
+    compose exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' | gzip -9 >"$backup_file"
+  fi
   test -s "$backup_file"
-  docker run --rm --network "$DOCKER_NETWORK" --env-file "$ENV_FILE" \
+  docker run --rm --network "$DOCKER_NETWORK" --env-file "$ENV_FILE" "${backend_security_args[@]}" \
     "$candidate_image" python manage.py migrate --plan
-  docker run --rm --network "$DOCKER_NETWORK" --env-file "$ENV_FILE" \
+  docker run --rm --network "$DOCKER_NETWORK" --env-file "$ENV_FILE" "${backend_security_args[@]}" \
     "$candidate_image" python manage.py migrate --noinput
 else
   echo "[4/7] 프론트엔드는 DB migration 없음"
