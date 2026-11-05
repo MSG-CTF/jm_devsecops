@@ -1,5 +1,6 @@
 .git
 .github
+gha-creds-*.json
 .gitignore
 .env
 .env.*

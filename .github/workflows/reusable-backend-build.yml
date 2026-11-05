@@ -1,0 +1,307 @@
+name: Reusable Backend Build and Publish
+
+on:
+  workflow_call:
+    inputs:
+      commit_sha:
+        description: Build할 호출 저장소의 40자리 commit SHA
+        required: true
+        type: string
+      project_id:
+        description: Artifact Registry가 있는 GCP project ID
+        required: true
+        type: string
+      region:
+        description: Artifact Registry 리전
+        required: false
+        default: asia-northeast3
+        type: string
+      artifact_repository:
+        description: 미리 생성한 Artifact Registry Docker 저장소 이름
+        required: true
+        type: string
+      image_name:
+        description: Artifact Registry 안의 백엔드 이미지 이름
+        required: false
+        default: backend
+        type: string
+      workload_identity_provider:
+        description: GitHub OIDC를 허용하는 GCP WIF provider 전체 resource 이름
+        required: true
+        type: string
+      publisher_service_account:
+        description: 지정 Artifact Registry에만 push할 수 있는 GCP 게시 서비스 계정
+        required: true
+        type: string
+    outputs:
+      image_uri:
+        description: 태그를 제외한 Artifact Registry 이미지 주소
+        value: ${{ jobs.build-scan-push.outputs.image_uri }}
+      image_digest:
+        description: Registry에 저장된 sha256 digest
+        value: ${{ jobs.build-scan-push.outputs.image_digest }}
+      image_ref:
+        description: Cloud Run에 배포할 image@sha256:digest 주소
+        value: ${{ jobs.build-scan-push.outputs.image_ref }}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: >-
+    backend-image-${{ inputs.project_id }}-${{ inputs.artifact_repository }}-${{ inputs.image_name }}-${{ inputs.commit_sha }}
+  cancel-in-progress: false
+
+jobs:
+  build-scan-push:
+    runs-on: ubuntu-latest
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+      security-events: write
+    outputs:
+      image_uri: ${{ steps.image.outputs.image_uri }}
+      image_digest: ${{ steps.digest.outputs.image_digest }}
+      image_ref: ${{ steps.digest.outputs.image_ref }}
+    env:
+      COMMIT_SHA: ${{ inputs.commit_sha }}
+      PROJECT_ID: ${{ inputs.project_id }}
+      REGION: ${{ inputs.region }}
+      ARTIFACT_REPOSITORY: ${{ inputs.artifact_repository }}
+      IMAGE_NAME: ${{ inputs.image_name }}
+      PUBLISHER_SERVICE_ACCOUNT: ${{ inputs.publisher_service_account }}
+    steps:
+      - name: Build 입력값 확인
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          [[ "$COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "commit_sha는 소문자 40자리 Git SHA여야 합니다."
+            exit 1
+          }
+          [[ "$PROJECT_ID" =~ ^[a-z][a-z0-9-]{4,28}[a-z0-9]$ ]] || {
+            echo "project_id 형식이 올바르지 않습니다."
+            exit 1
+          }
+          [[ "$REGION" =~ ^[a-z]+-[a-z0-9]+[0-9]$ ]] || {
+            echo "region 형식이 올바르지 않습니다."
+            exit 1
+          }
+          for value in "$ARTIFACT_REPOSITORY" "$IMAGE_NAME"; do
+            [[ "$value" =~ ^[a-z0-9][a-z0-9._-]{0,126}$ ]] || {
+              echo "Artifact Registry 저장소/이미지 이름 형식이 올바르지 않습니다."
+              exit 1
+            }
+          done
+          expected_publisher="github-backend-publisher-dev@${PROJECT_ID}.iam.gserviceaccount.com"
+          test "$PUBLISHER_SERVICE_ACCOUNT" = "$expected_publisher" || {
+            echo "publisher_service_account는 승인된 개발 image publisher여야 합니다."
+            exit 1
+          }
+
+      - name: 호출 저장소의 정확한 commit checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.COMMIT_SHA }}
+          fetch-depth: 0
+
+      - name: 루트 Dockerfile 확인
+        run: test -f Dockerfile || { echo "저장소 루트에 Dockerfile이 없습니다."; exit 1; }
+
+      - name: GCP 임시 인증 파일 Docker 제외 확인
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f .dockerignore || {
+            echo ".dockerignore가 없습니다."
+            exit 1
+          }
+          grep -Fxq 'gha-creds-*.json' .dockerignore || {
+            echo ".dockerignore에 gha-creds-*.json을 추가해야 합니다."
+            exit 1
+          }
+
+      - name: 병합 commit을 포함한 Gitleaks 검사
+        run: |
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/repo" \
+            ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
+            git \
+            --log-opts="--full-history --all --diff-filter=tuxdb -m" \
+            --redact \
+            --verbose \
+            /repo
+
+      - name: 이미지 주소 설정
+        id: image
+        shell: bash
+        run: |
+          set -euo pipefail
+          image_uri="${REGION}-docker.pkg.dev/${PROJECT_ID}/${ARTIFACT_REPOSITORY}/${IMAGE_NAME}"
+          echo "image_uri=${image_uri}" >> "$GITHUB_OUTPUT"
+          echo "image_tag=${image_uri}:${COMMIT_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Docker Buildx 설정
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: GCP 인증 전에 새 이미지 빌드
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: ./Dockerfile
+          load: true
+          push: false
+          tags: ${{ steps.image.outputs.image_tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: GCP WIF 인증
+        id: auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          project_id: ${{ inputs.project_id }}
+          workload_identity_provider: ${{ inputs.workload_identity_provider }}
+          service_account: ${{ inputs.publisher_service_account }}
+          token_format: access_token
+
+      - name: gcloud 설정
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+        with:
+          project_id: ${{ inputs.project_id }}
+
+      - name: Artifact Registry 불변 태그 설정 확인
+        shell: bash
+        run: |
+          set -euo pipefail
+          immutable_tags="$(
+            gcloud artifacts repositories describe "$ARTIFACT_REPOSITORY" \
+              --project="$PROJECT_ID" \
+              --location="$REGION" \
+              --format='value(dockerConfig.immutableTags)'
+          )"
+          immutable_tags="${immutable_tags,,}"
+          test "$immutable_tags" = "true" || {
+            echo "Artifact Registry repository의 immutable tags 설정이 켜져 있지 않습니다."
+            exit 1
+          }
+
+      - name: Artifact Registry 로그인
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ inputs.region }}-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+
+      - name: 동일 commit 이미지 존재 여부 확인
+        id: existing
+        env:
+          IMAGE_TAG: ${{ steps.image.outputs.image_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if docker buildx imagetools inspect "$IMAGE_TAG" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "기존 불변 commit SHA 이미지는 provenance 검증 후에만 사용합니다."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 기존 불변 이미지 pull
+        if: steps.existing.outputs.exists == 'true'
+        env:
+          IMAGE_TAG: ${{ steps.image.outputs.image_tag }}
+        run: docker pull "$IMAGE_TAG"
+
+      - name: 최종 이미지에 GCP 인증 파일이 없는지 확인
+        env:
+          IMAGE_TAG: ${{ steps.image.outputs.image_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          container_id="$(docker create "$IMAGE_TAG")"
+          trap 'docker rm -f "$container_id" >/dev/null 2>&1 || true' EXIT
+          if docker export "$container_id" | tar -tf - | \
+            grep -E '(^|/)gha-creds-[^/]*\.json$'; then
+            echo "GCP 임시 인증 파일이 이미지에 포함되어 있습니다."
+            exit 1
+          fi
+
+      - name: Trivy HIGH·CRITICAL 이미지 취약점/시크릿 차단
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.74.0
+          image-ref: ${{ steps.image.outputs.image_tag }}
+          scanners: vuln,secret
+          severity: CRITICAL,HIGH
+          ignore-unfixed: false
+          exit-code: "1"
+
+      - name: Trivy 전체 SARIF 생성
+        if: always()
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.74.0
+          image-ref: ${{ steps.image.outputs.image_tag }}
+          scanners: vuln,secret
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          ignore-unfixed: false
+          format: sarif
+          output: trivy-backend-publish-results.sarif
+          exit-code: "0"
+
+      - name: Trivy SARIF 업로드
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4
+        with:
+          sarif_file: trivy-backend-publish-results.sarif
+          category: trivy-backend-publish
+
+      - name: 검사 통과한 새 이미지 push
+        if: steps.existing.outputs.exists != 'true'
+        env:
+          IMAGE_TAG: ${{ steps.image.outputs.image_tag }}
+        run: docker push "$IMAGE_TAG"
+
+      - name: Registry digest 확인
+        id: digest
+        env:
+          IMAGE_TAG: ${{ steps.image.outputs.image_tag }}
+          IMAGE_URI: ${{ steps.image.outputs.image_uri }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          digest="$(
+            docker buildx imagetools inspect "$IMAGE_TAG" \
+              --format '{{json .Manifest.Digest}}' | tr -d '"'
+          )"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+            echo "Artifact Registry에서 올바른 digest를 얻지 못했습니다."
+            exit 1
+          }
+          echo "image_digest=${digest}" >> "$GITHUB_OUTPUT"
+          echo "image_ref=${IMAGE_URI}@${digest}" >> "$GITHUB_OUTPUT"
+
+      - name: 새 이미지 Build provenance 생성
+        if: steps.existing.outputs.exists != 'true'
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-name: ${{ steps.image.outputs.image_uri }}
+          subject-digest: ${{ steps.digest.outputs.image_digest }}
+
+      - name: Build provenance와 source commit 검증
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_REF: ${{ steps.digest.outputs.image_ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh attestation verify "oci://${IMAGE_REF}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow \
+              "MSG-CTF/jm_devsecops/.github/workflows/reusable-backend-build.yml" \
+            --source-digest "$COMMIT_SHA" \
+            --source-ref "refs/heads/main" \
+            --deny-self-hosted-runners
