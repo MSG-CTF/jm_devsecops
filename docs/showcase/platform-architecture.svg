@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1140" height="850" viewBox="0 0 1140 850" role="img" aria-labelledby="title desc"><title id="title">MSG CTF 플랫폼 전체 흐름</title><desc id="desc">문제 검사와 이미지 발행, 트랙별 참가자 플랫폼, 스케줄러와 브로커의 자원 예약, 런타임 실행, KOTH 점수 수집, SLA 관측 흐름</desc>
+<defs><marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M1 1 7 4 1 7" fill="none" stroke="#bd955f" stroke-width="1.5"/></marker></defs>
+<rect width="1140" height="850" rx="16" fill="#201b16"/>
+<g font-family="Segoe UI, Malgun Gothic, Apple SD Gothic Neo, sans-serif" fill="#f4ede0">
+<text x="32" y="43" font-size="27" font-weight="650" fill="#f4ede0" text-anchor="start">MSG CTF / PLATFORM</text>
+<text x="32" y="81" font-size="19" font-weight="400" fill="#e0bc86" text-anchor="start">문제 발행</text>
+<rect x="32" y="101" width="200" height="85" rx="9" fill="#2b251e" stroke="#655442"/>
+<text x="132.0" y="133" font-size="22" font-weight="600" fill="#f4ede0" text-anchor="middle">Problem source</text>
+<text x="132.0" y="162" font-size="17" font-weight="400" fill="#c7bbae" text-anchor="middle">info.yaml · 소스 · 파일</text>
+<rect x="275" y="101" width="205" height="85" rx="9" fill="#3c2d1d" stroke="#c7a46c"/>
+<text x="377.5" y="133" font-size="22" font-weight="600" fill="#f4ede0" text-anchor="middle">DevSecOps</text>
+<text x="377.5" y="162" font-size="17" font-weight="400" fill="#c7bbae" text-anchor="middle">검사 · 빌드 · SBOM</text>
+<rect x="525" y="101" width="250" height="85" rx="9" fill="#2b251e" stroke="#655442"/>
+<text x="650.0" y="133" font-size="22" font-weight="600" fill="#f4ede0" text-anchor="middle">Published release</text>
+<text x="650.0" y="162" font-size="17" font-weight="400" fill="#c7bbae" text-anchor="middle">GHCR · Actions 발행본</text>
+<rect x="820" y="101" width="285" height="85" rx="9" fill="#2b251e" stroke="#655442"/>
+<text x="962.5" y="133" font-size="22" font-weight="600" fill="#f4ede0" text-anchor="middle">Backend poller</text>
+<text x="962.5" y="162" font-size="17" font-weight="400" fill="#c7bbae" text-anchor="middle">버전 · 파일 · 환경변수 등록</text>
+<path d="M232 143H275" fill="none" stroke="#bd955f" stroke-width="2" marker-end="url(#arrow)"/>
+<path d="M480 143H525" fill="none" stroke="#bd955f" stroke-width="2" marker-end="url(#arrow)"/>
+<path d="M775 143H820" fill="none" stroke="#bd955f" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="32" y="237" font-size="19" font-weight="400" fill="#e0bc86" text-anchor="start">참가자 요청 → 문제 실행</text>
+<rect x="32" y="265" width="180" height="82" rx="9" fill="#2b251e" stroke="#655442"/>
+<text x="122.0" y="297" font-size="22" font-weight="600" fill="#f4ede0" text-anchor="middle">Frontend</text>
+<text x="122.0" y="326" font-size="17" font-weight="400" fill="#c7bbae" text-anchor="middle">보드 · 문제 · 관리자</text>
+<rect x="257" y="265" width="180" height="82" rx="9" fill="#2b251e" stroke="#655442"/>
+<text x="347.0" y="297" font-size="22" font-weight="600" fill="#f4ede0" text-anchor="middle">Backend</text>
+<text x="347.0" y="326" font-size="17" font-weight="400" fill="#c7bbae" text-anchor="middle">인증 · 점수 · 릴리스</text>
+<rect x="482" y="265" width="180" height="82" rx="9" fill="#2b251e" stroke="#655442"/>
+<text x="572.0" y="297" font-size="22" font-weight="600" fill="#f4ede0" text-anchor="middle">Scheduler</text>
+<text x="572.0" y="326" font-size="17" font-weight="400" fill="#c7bbae" text-anchor="middle">생성 · 만료 · 정리</text>
+<rect x="707" y="265" width="180" height="82" rx="9" fill="#2b251e" stroke="#655442"/>
+<text x="797.0" y="297" font-size="22" font-weight="600" fill="#f4ede0" text-anchor="middle">Runtime</text>
+<text x="797.0" y="326" font-size="17" font-weight="400" fill="#c7bbae" text-anchor="middle">실행 · 격리 · 삭제</text>
+<rect x="932" y="265" width="173" height="82" rx="9" fill="#2b251e" stroke="#655442"/>
+<text x="1018.5" y="297" font-size="22" font-weight="600" fill="#f4ede0" text-anchor="middle">Linux / K3s</text>
+<text x="1018.5" y="326" font-size="17" font-weight="400" fill="#c7bbae" text-anchor="middle">x86_64 · ARM64</text>
+<path d="M212 305H257" fill="none" stroke="#bd955f" stroke-width="2" marker-end="url(#arrow)"/>
+<path d="M437 305H482" fill="none" stroke="#bd955f" stroke-width="2" marker-end="url(#arrow)"/>
+<path d="M662 305H707" fill="none" stroke="#bd955f" stroke-width="2" marker-end="url(#arrow)"/>
+<path d="M887 305H932" fill="none" stroke="#bd955f" stroke-width="2" marker-end="url(#arrow)"/>
+<path d="M347 265V218H797V265" fill="none" stroke="#bd955f" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="572" y="211" font-size="16" font-weight="400" fill="#c7bbae" text-anchor="middle">Windows 실행 요청</text>
+<text x="32" y="379" font-size="18" font-weight="400" fill="#c7bbae" text-anchor="start">내부·외부 트랙 분리</text>
+<text x="32" y="405" font-size="17" font-weight="400" fill="#c7bbae" text-anchor="start">트랙별 DB · Redis</text>
+<rect x="482" y="426" width="180" height="86" rx="9" fill="#3c2d1d" stroke="#c7a46c"/>
+<text x="572.0" y="458" font-size="22" font-weight="600" fill="#f4ede0" text-anchor="middle">Broker</text>
+<text x="572.0" y="487" font-size="17" font-weight="400" fill="#c7bbae" text-anchor="middle">후보 조회 · 자원 예약</text>
+<rect x="707" y="426" width="398" height="86" rx="9" fill="#2b251e" stroke="#655442"/>
+<text x="906.0" y="458" font-size="22" font-weight="600" fill="#f4ede0" text-anchor="middle">AWS · GCP · Azure</text>
+<text x="906.0" y="487" font-size="17" font-weight="400" fill="#c7bbae" text-anchor="middle">계정별 인벤토리 · CPU / 메모리 / 디스크</text>
+<path d="M572 347V426" fill="none" stroke="#bd955f" stroke-width="2" marker-end="url(#arrow)"/>
+<path d="M662 469H707" fill="none" stroke="#bd955f" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="32" y="426" width="180" height="86" rx="9" fill="#2b251e" stroke="#655442"/>
+<text x="122.0" y="458" font-size="22" font-weight="600" fill="#f4ede0" text-anchor="middle">KOTH VM</text>
+<text x="122.0" y="487" font-size="17" font-weight="400" fill="#c7bbae" text-anchor="middle">제출 · 경기 진행</text>
+<rect x="257" y="426" width="180" height="86" rx="9" fill="#2b251e" stroke="#655442"/>
+<text x="347.0" y="458" font-size="22" font-weight="600" fill="#f4ede0" text-anchor="middle">Scoring</text>
+<text x="347.0" y="487" font-size="17" font-weight="400" fill="#c7bbae" text-anchor="middle">Backend 점수 수집</text>
+<path d="M212 468H257" fill="none" stroke="#bd955f" stroke-width="2" marker-end="url(#arrow)"/>
+<path d="M347 426V347" fill="none" stroke="#bd955f" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="707" y="552" width="398" height="86" rx="9" fill="#2b251e" stroke="#655442"/>
+<text x="906.0" y="584" font-size="22" font-weight="600" fill="#f4ede0" text-anchor="middle">Dedicated VM / Windows</text>
+<text x="906.0" y="613" font-size="17" font-weight="400" fill="#c7bbae" text-anchor="middle">Runtime의 별도 VM 실행 경로</text>
+<path d="M797 347V402H1121V594H1105" fill="none" stroke="#bd955f" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="32" y="574" font-size="19" font-weight="400" fill="#e0bc86" text-anchor="start">DevSecOps / 플랫폼 배포</text>
+<text x="32" y="608" font-size="19" font-weight="400" fill="#f4ede0" text-anchor="start">테스트·보안 검사 → 이미지 빌드 → VM 배포</text>
+<text x="32" y="637" font-size="18" font-weight="400" fill="#c7bbae" text-anchor="start">헬스체크 · 실패 시 앱 롤백</text>
+<rect x="32" y="697" width="1073" height="92" rx="9" fill="#2b251e" stroke="#655442"/>
+<text x="568.5" y="729" font-size="22" font-weight="600" fill="#f4ede0" text-anchor="middle">SLA / Sentinel</text>
+<text x="568.5" y="758" font-size="17" font-weight="400" fill="#c7bbae" text-anchor="middle">Backend · Scheduler · Broker · Runtime · 실행 노드 상태 관측</text>
+<path d="M572 512V675H568V697" fill="none" stroke="#bd955f" stroke-width="2" marker-end="url(#arrow)" stroke-dasharray="5 5"/>
+<text x="32" y="826" font-size="20" font-weight="400" fill="#e0bc86" text-anchor="start">종료: Runtime 자원 삭제 → Scheduler 확인 → Broker 예약 반납</text>
+</g></svg>
