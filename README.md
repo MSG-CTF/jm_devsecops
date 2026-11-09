@@ -6,10 +6,17 @@
 
 <h2 align="center">Overview</h2>
 
-<table align="center">
-<tr><th width="260">검사</th><th width="260">빌드·테스트</th><th width="260">배포</th></tr>
-<tr><td align="center">코드·의존성·비밀값 검사</td><td align="center">DB·Redis·마이그레이션·이미지</td><td align="center">VM 배포·API 연결 유지·롤백</td></tr>
-</table>
+![MSG CTF 전체 아키텍처: 문제 발행, 플랫폼, 자원 예약, 런타임, KOTH와 SLA](docs/showcase/platform-architecture.svg)
+
+| 담당 저장소 | 구현 |
+| --- | --- |
+| [**Challenge pipeline**](https://github.com/MSG-CTF/msgctf-devsecops) | info.yaml 검증 → 이미지 빌드·Trivy·Gitleaks → GHCR·SBOM·발행본 제공 |
+| [**Platform pipeline**](https://github.com/MSG-CTF/jm_devsecops/tree/main) | 테스트·보안 검사 → 이미지 빌드 → VM 배포·헬스체크·앱 롤백 |
+
+배포할 커밋을 고정하고, DB 백업·마이그레이션과 새 앱의 응답을 확인한 뒤 전환합니다
+실패하면 앱을 이전 버전으로 돌리며, DB 복구는 백업을 기준으로 별도 처리합니다
+
+[VM 자동 배포](docs/development-vm-auto-deploy.md) · [플랫폼 흐름 보기](https://msg-ctf.github.io/platform.html#architecture)
 
 <h2 align="center">Contributors</h2>
 
