@@ -1,6 +1,6 @@
 <div align="center">
 <h1>MSG CTF · DevSecOps</h1>
-<p>프론트·백엔드의 빌드·보안 검사·VM 자동 배포를 담당하는 공통 워크플로</p>
+<p>플랫폼 빌드 · 보안 검사 · VM 자동 배포</p>
 <p><a href="https://msg-ctf.github.io/platform.html">플랫폼</a> · <a href="#development">개발 문서</a> · <a href="https://github.com/MSG-CTF/jm_devsecops/tree/main">실행 코드 (main)</a></p>
 </div>
 
