@@ -13,8 +13,8 @@
 | [**Challenge pipeline**](https://github.com/MSG-CTF/msgctf-devsecops) | info.yaml 검증 → 이미지 빌드·Trivy·Gitleaks → GHCR·SBOM·발행본 제공 |
 | [**Platform pipeline**](https://github.com/MSG-CTF/jm_devsecops/tree/main) | 테스트·보안 검사 → 이미지 빌드 → VM 배포·헬스체크·앱 롤백 |
 
-배포할 커밋을 고정하고, DB 백업·마이그레이션과 새 앱의 응답을 확인한 뒤 전환합니다
-실패하면 앱을 이전 버전으로 돌리며, DB 복구는 백업을 기준으로 별도 처리합니다
+커밋 고정 → DB 백업·마이그레이션 → 새 앱 응답 확인 → 전환
+실패 시 앱 롤백 · DB는 백업으로 별도 복구
 
 [VM 자동 배포](docs/development-vm-auto-deploy.md) · [플랫폼 흐름 보기](https://msg-ctf.github.io/platform.html#architecture)
 
