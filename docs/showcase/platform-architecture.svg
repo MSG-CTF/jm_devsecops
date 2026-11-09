@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1140" height="850" viewBox="0 0 1140 850" role="img" aria-labelledby="title desc"><title id="title">MSG CTF 플랫폼 전체 흐름</title><desc id="desc">문제 검사와 이미지 발행, 트랙별 참가자 플랫폼, 스케줄러와 브로커의 자원 예약, 런타임 실행, KOTH 점수 수집, SLA 관측 흐름</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="1140" height="1155" viewBox="0 0 1140 1155" role="img" aria-labelledby="title desc"><title id="title">MSG CTF 플랫폼 전체 흐름</title><desc id="desc">문제 검사와 이미지 발행, 트랙별 참가자 플랫폼, 스케줄러와 브로커의 자원 예약, 런타임 실행, KOTH 점수 수집, SLA 관측 흐름</desc>
 <defs><marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M1 1 7 4 1 7" fill="none" stroke="#bd955f" stroke-width="1.5"/></marker></defs>
-<rect width="1140" height="850" rx="16" fill="#201b16"/>
+<rect width="1140" height="1155" rx="16" fill="#201b16"/>
 <g font-family="Segoe UI, Malgun Gothic, Apple SD Gothic Neo, sans-serif" fill="#f4ede0">
 <text x="32" y="43" font-size="27" font-weight="650" fill="#f4ede0" text-anchor="start">MSG CTF / PLATFORM</text>
 <text x="32" y="81" font-size="19" font-weight="400" fill="#e0bc86" text-anchor="start">문제 발행</text>
@@ -66,9 +66,42 @@
 <text x="32" y="574" font-size="19" font-weight="400" fill="#e0bc86" text-anchor="start">DevSecOps / 플랫폼 배포</text>
 <text x="32" y="608" font-size="19" font-weight="400" fill="#f4ede0" text-anchor="start">테스트·보안 검사 → 이미지 빌드 → VM 배포</text>
 <text x="32" y="637" font-size="18" font-weight="400" fill="#c7bbae" text-anchor="start">헬스체크 · 실패 시 앱 롤백</text>
-<rect x="32" y="697" width="1073" height="92" rx="9" fill="#2b251e" stroke="#655442"/>
-<text x="568.5" y="729" font-size="22" font-weight="600" fill="#f4ede0" text-anchor="middle">SLA / Sentinel</text>
-<text x="568.5" y="758" font-size="17" font-weight="400" fill="#c7bbae" text-anchor="middle">Backend · Scheduler · Broker · Runtime · 실행 노드 상태 관측</text>
-<path d="M572 512V675H568V697" fill="none" stroke="#bd955f" stroke-width="2" marker-end="url(#arrow)" stroke-dasharray="5 5"/>
-<text x="32" y="826" font-size="20" font-weight="400" fill="#e0bc86" text-anchor="start">종료: Runtime 자원 삭제 → Scheduler 확인 → Broker 예약 반납</text>
+<path d="M32 674H1105" stroke="#655442"/>
+<g transform="translate(48 697)"><g font-family="Segoe UI, Malgun Gothic, Apple SD Gothic Neo, sans-serif">
+<defs><marker id="sla-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M1 1 7 4 1 7" fill="none" stroke="#bd955f" stroke-width="1.5"/></marker></defs>
+<text x="0" y="24" font-size="23" fill="#f4ede0" font-weight="600" text-anchor="start">SLA / 상시 점검</text>
+<text x="1040" y="24" font-size="15" fill="#c7bbae" font-weight="400" text-anchor="end">화살표: 수집 데이터·결과</text>
+<rect x="0" y="52" width="292" height="88" rx="9" fill="#25211b" stroke="#655442"/>
+<text x="18" y="79" font-size="19" fill="#f4ede0" font-weight="600" text-anchor="start">서비스 API</text>
+<text x="18" y="103" font-size="16" fill="#c7bbae" font-weight="400" text-anchor="start">Frontend · Backend</text>
+<text x="18" y="125" font-size="16" fill="#c7bbae" font-weight="400" text-anchor="start">Scheduler · Broker · Runtime</text>
+<rect x="0" y="156" width="292" height="88" rx="9" fill="#25211b" stroke="#655442"/>
+<text x="18" y="183" font-size="19" fill="#f4ede0" font-weight="600" text-anchor="start">인스턴스 목록</text>
+<text x="18" y="207" font-size="16" fill="#c7bbae" font-weight="400" text-anchor="start">Scheduler 전체 목록</text>
+<text x="18" y="229" font-size="16" fill="#c7bbae" font-weight="400" text-anchor="start">Runtime 상태 대조</text>
+<rect x="0" y="260" width="292" height="88" rx="9" fill="#25211b" stroke="#655442"/>
+<text x="18" y="287" font-size="19" fill="#f4ede0" font-weight="600" text-anchor="start">노드 수집기</text>
+<text x="18" y="311" font-size="16" fill="#c7bbae" font-weight="400" text-anchor="start">CPU · 메모리 · 디스크</text>
+<text x="18" y="333" font-size="16" fill="#c7bbae" font-weight="400" text-anchor="start">K3s · Windows · 서비스 상태</text>
+<path d="M292 96H326V200H370" fill="none" stroke="#bd955f" stroke-width="1.8" marker-end="url(#sla-arrow)"/>
+<path d="M292 200H370" fill="none" stroke="#bd955f" stroke-width="1.8" marker-end="url(#sla-arrow)"/>
+<path d="M292 304H326V200H370" fill="none" stroke="#bd955f" stroke-width="1.8" marker-end="url(#sla-arrow)"/>
+<rect x="370" y="135" width="285" height="130" rx="9" fill="#34291e" stroke="#bf995f"/>
+<text x="512.5" y="179" font-size="24" fill="#f4ede0" font-weight="600" text-anchor="middle">SLA / Sentinel</text>
+<text x="512.5" y="212" font-size="18" fill="#c7bbae" font-weight="400" text-anchor="middle">상태 판정</text>
+<text x="512.5" y="238" font-size="18" fill="#c7bbae" font-weight="400" text-anchor="middle">장애·복구 기록</text>
+<path d="M655 200H697V96H740" fill="none" stroke="#bd955f" stroke-width="1.8" marker-end="url(#sla-arrow)"/>
+<path d="M655 200H740" fill="none" stroke="#bd955f" stroke-width="1.8" marker-end="url(#sla-arrow)"/>
+<path d="M655 200H697V304H740" fill="none" stroke="#bd955f" stroke-width="1.8" marker-end="url(#sla-arrow)"/>
+<rect x="740" y="52" width="300" height="88" rx="9" fill="#25211b" stroke="#655442"/>
+<text x="758" y="86" font-size="19" fill="#f4ede0" font-weight="600" text-anchor="start">운영 대시보드</text>
+<text x="758" y="116" font-size="17" fill="#c7bbae" font-weight="400" text-anchor="start">현재 상태 · 수집 시각 · 이력</text>
+<rect x="740" y="156" width="300" height="88" rx="9" fill="#25211b" stroke="#655442"/>
+<text x="758" y="190" font-size="19" fill="#f4ede0" font-weight="600" text-anchor="start">Discord</text>
+<text x="758" y="220" font-size="17" fill="#c7bbae" font-weight="400" text-anchor="start">장애·복구 알림</text>
+<rect x="740" y="260" width="300" height="88" rx="9" fill="#25211b" stroke="#655442"/>
+<text x="758" y="294" font-size="19" fill="#f4ede0" font-weight="600" text-anchor="start">Prometheus → Grafana</text>
+<text x="758" y="324" font-size="17" fill="#c7bbae" font-weight="400" text-anchor="start">메트릭 저장 · 조회</text>
+</g></g>
+<text x="32" y="1122" font-size="18" fill="#e0bc86">종료: Runtime 자원 삭제 → Scheduler 확인 → Broker 예약 반납</text>
 </g></svg>
